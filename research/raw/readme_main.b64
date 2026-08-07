@@ -1,0 +1,8 @@
+INVALID_ARGUMENT: Request contains an invalid argument
+[type.googleapis.com/google.rpc.LocalizedMessage]
+locale: "en-US"
+message: "The specified format type is not supported"
+
+[type.googleapis.com/google.rpc.RequestInfo]
+request_id: "75e90572f1a0403e89d69c113d61a1ba"
+
