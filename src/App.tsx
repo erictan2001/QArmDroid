@@ -105,8 +105,6 @@ export function App() {
     const container = screenRef.current;
     if (!container) return;
 
-    let lastMoveTime = 0;
-
     const getCanvasCoords = (clientX: number, clientY: number) => {
       const canvas = container.querySelector("canvas") || container;
       const rect = canvas.getBoundingClientRect();
@@ -114,8 +112,6 @@ export function App() {
 
       const rawX = clientX - rect.left;
       const rawY = clientY - rect.top;
-
-      if (rawX < 0 || rawX > rect.width || rawY < 0 || rawY > rect.height) return null;
 
       const androidX = Math.round((rawX / rect.width) * 1280);
       const androidY = Math.round((rawY / rect.height) * 800);
@@ -143,9 +139,6 @@ export function App() {
       try {
         (e.target as HTMLElement)?.setPointerCapture?.(e.pointerId);
       } catch {}
-
-      // Fire real-time DOWN
-      invoke("send_motion_down", { x: coords.x, y: coords.y }).catch(() => {});
     };
 
     const handlePointerMoveNative = (e: PointerEvent) => {
@@ -155,13 +148,6 @@ export function App() {
 
       pointerState.current.currentX = coords.x;
       pointerState.current.currentY = coords.y;
-
-      const now = Date.now();
-      if (now - lastMoveTime > 40) {
-        // Throttled 25 FPS motion event for real-time drag
-        lastMoveTime = now;
-        invoke("send_motion_move", { x: coords.x, y: coords.y }).catch(() => {});
-      }
     };
 
     const handlePointerUpNative = (e: PointerEvent) => {
@@ -178,11 +164,13 @@ export function App() {
       const dist = Math.hypot(dx, dy);
       const duration = Date.now() - start.startTime;
 
-      if (dist < 10 && duration < 350) {
-        // Clean tap
-        invoke("send_touch_tap", { x: endX, y: endY }).catch(() => {});
+      if (dist < 10) {
+        // Precise atomic tap
+        invoke("send_touch_tap", { x: endX, y: endY }).catch((err) => {
+          setLogMsg(`Tap error: ${err}`);
+        });
       } else {
-        // Precise swipe / drag trajectory
+        // Smooth interpolated swipe trajectory
         const dur = Math.max(100, Math.min(600, duration));
         invoke("send_touch_swipe", {
           x1: start.startX,
@@ -190,11 +178,10 @@ export function App() {
           x2: endX,
           y2: endY,
           durationMs: dur,
-        }).catch(() => {});
+        }).catch((err) => {
+          setLogMsg(`Swipe error: ${err}`);
+        });
       }
-
-      // Always close touch sequence with UP
-      invoke("send_motion_up", { x: endX, y: endY }).catch(() => {});
     };
 
     // Use capture phase so we intercept before any child stops propagation
