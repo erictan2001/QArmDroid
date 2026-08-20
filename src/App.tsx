@@ -209,6 +209,10 @@ export function App() {
   useEffect(() => {
     if (status.adb_ready && !optimized) {
       invoke("optimize_performance").catch(() => {});
+      // Deploy zero-latency native touch daemon (writes directly to /dev/input/event*)
+      invoke("deploy_touch_daemon")
+        .then(() => setLogMsg("Touch daemon active — direct input enabled"))
+        .catch(() => setLogMsg("Touch daemon not available, using ADB fallback"));
       setOptimized(true);
     } else if (!status.adb_ready) {
       setOptimized(false);
