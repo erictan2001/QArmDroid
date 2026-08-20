@@ -94,10 +94,22 @@ fn stop_emulator() -> Result<String, String> {
     Ok("Emulator stopped.".to_string())
 }
 
+fn is_adb_ready() -> bool {
+    // Non-destructive check to avoid dropping active ADB TCP sockets
+    Command::new("adb")
+        .args(&["-s", "127.0.0.1:5555", "get-state"])
+        .output()
+        .map(|o| {
+            let out = String::from_utf8_lossy(&o.stdout);
+            out.contains("device")
+        })
+        .unwrap_or(false)
+}
+
 #[tauri::command]
 fn get_emulator_status() -> EmulatorStatus {
     let vnc_ready = is_port_open(5901);
-    let adb_ready = is_port_open(5555);
+    let adb_ready = is_adb_ready();
     let running = vnc_ready || adb_ready;
 
     EmulatorStatus {

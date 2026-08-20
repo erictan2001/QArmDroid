@@ -490,6 +490,8 @@ static void child_loop(void)
                     "/vendor/etc/permissions/android.hardware.uwb.xml",
                     "/vendor/etc/permissions/com.google.cf.uwb.xml",
                     "/vendor/etc/permissions/cuttlefish_uwb.xml",
+                    "/vendor/etc/permissions/android.hardware.bluetooth.xml",
+                    "/vendor/etc/permissions/android.hardware.bluetooth_le.xml",
                     "/vendor/etc/permissions/android.hardware.telephony.data.xml",
                     "/vendor/etc/permissions/android.hardware.telephony.gsm.xml",
                     "/vendor/etc/permissions/android.hardware.telephony.cdma.xml",
@@ -497,27 +499,32 @@ static void child_loop(void)
                     "/vendor/etc/permissions/android.hardware.telephony.satellite.xml",
                     "/vendor/etc/permissions/android.hardware.telephony.xml",
                     "/vendor/etc/vintf/manifest/android.hardware.uwb-service.xml",
+                    "/vendor/etc/vintf/manifest/android.hardware.radio.data-service.xml",
+                    "/vendor/etc/vintf/manifest/android.hardware.radio.messaging-service.xml",
+                    "/vendor/etc/vintf/manifest/android.hardware.radio.modem-service.xml",
+                    "/vendor/etc/vintf/manifest/android.hardware.radio.network-service.xml",
+                    "/vendor/etc/vintf/manifest/android.hardware.radio.sim-service.xml",
+                    "/vendor/etc/vintf/manifest/android.hardware.radio.voice-service.xml",
+                    "/vendor/etc/vintf/manifest/android.hardware.bluetooth-service.default.xml",
                     0
                 };
                 for (int k = 0; disabled_files[k]; k++) {
                     sys5(40 /* SYS_mount */, (long)"/system/etc/hosts", (long)disabled_files[k], 0, 4096 /* MS_BIND */, 0);
                 }
-                klog("arm64droid-init: disabled seriallogging, UWB, and telephony feature manifests!\n");
+                klog("arm64droid-init: disabled seriallogging, UWB, Bluetooth, and telephony feature manifests!\n");
                 sys4(33 /* SYS_mknodat */, AT_FDCWD, (long)"/dev/ttyS1", 0666 | 0x2000 /* S_IFCHR */, (1 << 8) | 3 /* /dev/null */);
                 sys4(33 /* SYS_mknodat */, AT_FDCWD, (long)"/dev/ttyAMA1", 0666 | 0x2000 /* S_IFCHR */, (204 << 8) | 65 /* ttyAMA1 */);
                 sys3(36 /* SYS_symlinkat */, (long)"/dev/block/vda19", AT_FDCWD, (long)"/dev/block/by-name/frp");
 
-                /* Set up IDC files so QEMU Virtio Tablet is recognized as a direct touchscreen */
-                sys3(34 /* SYS_mkdirat */, AT_FDCWD, (long)"/vendor/usr", 0755);
-                sys5(40 /* SYS_mount */, (long)"tmpfs", (long)"/vendor/usr", (long)"tmpfs", 0, 0);
-                sys3(34 /* SYS_mkdirat */, AT_FDCWD, (long)"/vendor/usr/idc", 0755);
+                /* Set up IDC files on existing /system/usr/idc directory */
+                sys5(40 /* SYS_mount */, (long)"tmpfs", (long)"/system/usr/idc", (long)"tmpfs", 0, 0);
 
                 const char idc_data[] = "touch.deviceType = touchScreen\ntouch.orientationAware = 1\n";
                 const char *idc_names[] = {
-                    "/vendor/usr/idc/QEMU_Virtio_Tablet.idc",
-                    "/vendor/usr/idc/Vendor_0627_Product_0003.idc",
-                    "/vendor/usr/idc/QEMU_Virtio_Mouse.idc",
-                    "/vendor/usr/idc/Vendor_0627_Product_0001.idc",
+                    "/system/usr/idc/QEMU_Virtio_Tablet.idc",
+                    "/system/usr/idc/Vendor_0627_Product_0003.idc",
+                    "/system/usr/idc/QEMU_Virtio_Mouse.idc",
+                    "/system/usr/idc/Vendor_0627_Product_0001.idc",
                     0
                 };
                 for (int j = 0; idc_names[j]; j++) {
@@ -527,7 +534,7 @@ static void child_loop(void)
                         sys1(SYS_close, idcfd);
                     }
                 }
-                klog("arm64droid-init: created touchscreen IDC files in /vendor/usr/idc!\n");
+                klog("arm64droid-init: mounted tmpfs on /system/usr/idc and created touchscreen IDC files!\n");
             }
         }
 
