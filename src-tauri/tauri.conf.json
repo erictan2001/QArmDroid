@@ -12,9 +12,12 @@
   "app": {
     "windows": [
       {
-        "title": "tauri-app",
-        "width": 800,
-        "height": 600
+        "title": "ARM64 Android Emulator",
+        "width": 1360,
+        "height": 880,
+        "minWidth": 900,
+        "minHeight": 650,
+        "resizable": true
       }
     ],
     "security": {

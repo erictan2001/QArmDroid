@@ -1,51 +1,105 @@
+use std::net::{SocketAddr, TcpStream};
 use std::process::Command;
+use std::time::Duration;
+use serde::Serialize;
 
-// Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-#[tauri::command]
-fn greet(name: &str) -> String {
-    format!("Hello, {}! You've been greeted from Rust!", name)
+#[derive(Serialize)]
+struct EmulatorStatus {
+    running: bool,
+    vnc_ready: bool,
+    adb_ready: bool,
+}
+
+fn is_port_open(port: u16) -> bool {
+    let addr: SocketAddr = format!("127.0.0.1:{}", port).parse().unwrap();
+    TcpStream::connect_timeout(&addr, Duration::from_millis(300)).is_ok()
 }
 
 #[tauri::command]
-fn start_emulator(image_path: Option<String>) -> Result<String, String> {
-    let qemu_path = "C:\\msys64\\clangarm64\\bin\\qemu-system-aarch64.exe";
-    
-    let mut args = vec![
-        "-accel".to_string(), "whpx".to_string(),
-        "-cpu".to_string(), "host".to_string(),
-        "-machine".to_string(), "virt".to_string(),
-        "-m".to_string(), "4G".to_string(),
-        "-device".to_string(), "virtio-gpu-gl-pci,blob=on,venus=on,hostmem=2G".to_string(),
-        "-display".to_string(), "sdl,gl=on".to_string(),
-        "-device".to_string(), "virtio-net-pci,netdev=net0".to_string(),
-        "-netdev".to_string(), "user,id=net0".to_string(),
-        "-device".to_string(), "virtio-mouse-pci".to_string(),
-        "-device".to_string(), "virtio-keyboard-pci".to_string(),
-        "-serial".to_string(), "mon:stdio".to_string(),
-    ];
-
-    if let Some(mut path) = image_path {
-        // Remove surrounding quotes if present (e.g. from Shift + Right Click "Copy as Path")
-        path = path.trim_matches('\"').trim_matches('\'').to_string();
-        
-        args.push("-drive".to_string());
-        // Use file: prefix to avoid "Unknown protocol" errors with Windows drive letters
-        args.push(format!("file=file:{},format=raw,if=virtio", path));
+fn start_emulator() -> Result<String, String> {
+    if is_port_open(5901) || is_port_open(5555) {
+        return Ok("Emulator is already running.".to_string());
     }
 
-    match Command::new(qemu_path)
-        .args(&args)
-        .spawn() {
-            Ok(_) => Ok("Emulator started successfully".to_string()),
-            Err(e) => Err(format!("Failed to start emulator: {}", e)),
-        }
+    match Command::new("powershell.exe")
+        .args(&[
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            "tools\\launch.ps1",
+            "-DisplayMode",
+            "embedded",
+        ])
+        .spawn()
+    {
+        Ok(_) => Ok("Emulator started in embedded display mode.".to_string()),
+        Err(e) => Err(format!("Failed to start emulator: {}", e)),
+    }
+}
+
+#[tauri::command]
+fn stop_emulator() -> Result<String, String> {
+    // Kill QEMU process on Windows
+    let _ = Command::new("taskkill")
+        .args(&["/F", "/IM", "qemu-system-aarch64.exe"])
+        .output();
+
+    Ok("Emulator stopped.".to_string())
+}
+
+#[tauri::command]
+fn get_emulator_status() -> EmulatorStatus {
+    let vnc_ready = is_port_open(5901);
+    let adb_ready = is_port_open(5555);
+    let running = vnc_ready || adb_ready;
+
+    EmulatorStatus {
+        running,
+        vnc_ready,
+        adb_ready,
+    }
+}
+
+#[tauri::command]
+fn send_adb_key(key: String) -> Result<String, String> {
+    let output = Command::new("adb")
+        .args(&["-s", "127.0.0.1:5555", "shell", "input", "keyevent", &key])
+        .output()
+        .map_err(|e| format!("ADB error: {}", e))?;
+
+    if output.status.success() {
+        Ok("Key event sent".to_string())
+    } else {
+        Err(String::from_utf8_lossy(&output.stderr).to_string())
+    }
+}
+
+#[tauri::command]
+fn send_adb_text(text: String) -> Result<String, String> {
+    let output = Command::new("adb")
+        .args(&["-s", "127.0.0.1:5555", "shell", "input", "text", &text])
+        .output()
+        .map_err(|e| format!("ADB error: {}", e))?;
+
+    if output.status.success() {
+        Ok("Text sent".to_string())
+    } else {
+        Err(String::from_utf8_lossy(&output.stderr).to_string())
+    }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![greet, start_emulator])
+        .invoke_handler(tauri::generate_handler![
+            start_emulator,
+            stop_emulator,
+            get_emulator_status,
+            send_adb_key,
+            send_adb_text
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

@@ -1,0 +1,443 @@
+{
+  "id": "8dd07b25904a14e97e70f26ebc279c2094376eac",
+  "entries": [
+    {
+      "mode": 33188,
+      "type": "blob",
+      "id": "f6cb8ad931f5442a5e2276ed66ba7b5a733b82c6",
+      "name": ".clang-format"
+    },
+    {
+      "mode": 33188,
+      "type": "blob",
+      "id": "a197c03704718d6500e837376649e3744683a34d",
+      "name": "Android.bp"
+    },
+    {
+      "mode": 33188,
+      "type": "blob",
+      "id": "ba6ffce9bd988e6ddaf65e10340fd22300eeaf67",
+      "name": "ApexInfoList.xsd"
+    },
+    {
+      "mode": 33188,
+      "type": "blob",
+      "id": "184fa6b28d254bda543587c7011762cc4825f3a9",
+      "name": "ApexServiceTestCases.xml"
+    },
+    {
+      "mode": 33188,
+      "type": "blob",
+      "id": "aea1d248d234ad3c78ab8bc44b571677bc7bb3cc",
+      "name": "ApexTestCases.xml"
+    },
+    {
+      "mode": 33188,
+      "type": "blob",
+      "id": "1a3013146dc815dfb7e79512e72ea2e61221675c",
+      "name": "TEST_MAPPING"
+    },
+    {
+      "mode": 16384,
+      "type": "tree",
+      "id": "80c7f0e16d217711c77a4eafe34d92bd89de0efb",
+      "name": "aidl"
+    },
+    {
+      "mode": 16384,
+      "type": "tree",
+      "id": "f7c0db2180488d86dab363a05aab6d636eced5ce",
+      "name": "apex-info-list-api"
+    },
+    {
+      "mode": 33188,
+      "type": "blob",
+      "id": "a319f101d1eb0b64fd963cbb2dbd5bcd4dd5c886",
+      "name": "apex_blocklist.cpp"
+    },
+    {
+      "mode": 33188,
+      "type": "blob",
+      "id": "60095bae1d449c7ce172f18bdb0674e1de4d3a0e",
+      "name": "apex_blocklist.h"
+    },
+    {
+      "mode": 33188,
+      "type": "blob",
+      "id": "c26778a373131c030fd3e61c0986d06f46dd2ad4",
+      "name": "apex_blocklist_test.cpp"
+    },
+    {
+      "mode": 33188,
+      "type": "blob",
+      "id": "68b3fdb5917c8fb387a34fd8cbd7157600b76d1f",
+      "name": "apex_classpath.cpp"
+    },
+    {
+      "mode": 33188,
+      "type": "blob",
+      "id": "de3d07f031581185be15e589acda612a3984499b",
+      "name": "apex_classpath.h"
+    },
+    {
+      "mode": 33188,
+      "type": "blob",
+      "id": "efa4f3f02c750ba5880e879ee03d8f6f94951a56",
+      "name": "apex_classpath_test.cpp"
+    },
+    {
+      "mode": 33188,
+      "type": "blob",
+      "id": "f2562ca702fff64d20771ed55bddce151c9d00e8",
+      "name": "apex_constants.h"
+    },
+    {
+      "mode": 33188,
+      "type": "blob",
+      "id": "bee8fc6fce776b918c122557e363320fa2f31e07",
+      "name": "apex_database.cpp"
+    },
+    {
+      "mode": 33188,
+      "type": "blob",
+      "id": "8277c4f8a6c2c097f6a56bd42b106d27ebdbc5a8",
+      "name": "apex_database.h"
+    },
+    {
+      "mode": 33188,
+      "type": "blob",
+      "id": "9af9a646a2607416ed768bbd76a937af55699370",
+      "name": "apex_database_test.cpp"
+    },
+    {
+      "mode": 33188,
+      "type": "blob",
+      "id": "1ca6cfebb1c3f52def5b0e20fa9264c7cbb444da",
+      "name": "apex_file.cpp"
+    },
+    {
+      "mode": 33188,
+      "type": "blob",
+      "id": "86d032b150c7880a77b7f4e85e174bd200ab57c0",
+      "name": "apex_file.h"
+    },
+    {
+      "mode": 33188,
+      "type": "blob",
+      "id": "89c9d10eb0562bc472ad602809e3cbd76fda8a16",
+      "name": "apex_file_repository.cpp"
+    },
+    {
+      "mode": 33188,
+      "type": "blob",
+      "id": "8d9e8a6385cde4f41132fc94c662f12b1bb4842c",
+      "name": "apex_file_repository.h"
+    },
+    {
+      "mode": 33188,
+      "type": "blob",
+      "id": "70ca9f21072cce949f485069a80517e579795ab1",
+      "name": "apex_file_repository_test.cpp"
+    },
+    {
+      "mode": 33188,
+      "type": "blob",
+      "id": "4d8642c43d9300e50484b80f836cb8f144682ce5",
+      "name": "apex_file_test.cpp"
+    },
+    {
+      "mode": 33188,
+      "type": "blob",
+      "id": "bfba216edf336bfac171f7d783190e4d05c4dfd2",
+      "name": "apex_manifest.cpp"
+    },
+    {
+      "mode": 33188,
+      "type": "blob",
+      "id": "5bdd43bd134b99024d0980fc641bce13b62d1803",
+      "name": "apex_manifest.h"
+    },
+    {
+      "mode": 33188,
+      "type": "blob",
+      "id": "f5bc93ca14be8217f7ceb624b6107a0dd1efda8d",
+      "name": "apex_manifest_test.cpp"
+    },
+    {
+      "mode": 33188,
+      "type": "blob",
+      "id": "699126d5836554afa7925af1a42211bcc33d6b3a",
+      "name": "apex_sha.cpp"
+    },
+    {
+      "mode": 33188,
+      "type": "blob",
+      "id": "c5099166f409f7b9d13d817e5133e18612a6168e",
+      "name": "apex_sha.h"
+    },
+    {
+      "mode": 33188,
+      "type": "blob",
+      "id": "c6411561fc2584552542908e84114da1f44dc6b5",
+      "name": "apex_shim.cpp"
+    },
+    {
+      "mode": 33188,
+      "type": "blob",
+      "id": "fc8c11c38c20564e8d969a65fdc5ec33d83e2628",
+      "name": "apex_shim.h"
+    },
+    {
+      "mode": 33188,
+      "type": "blob",
+      "id": "0039422f1b4a0717c88bd226b4fe1b5975c08f75",
+      "name": "apexd.aconfig"
+    },
+    {
+      "mode": 33188,
+      "type": "blob",
+      "id": "b5a66650c93e4f8b44114174e55c750c3e6dd48e",
+      "name": "apexd.cpp"
+    },
+    {
+      "mode": 33188,
+      "type": "blob",
+      "id": "6936fd115f21fd4799abf74028bb835de83e2842",
+      "name": "apexd.h"
+    },
+    {
+      "mode": 33188,
+      "type": "blob",
+      "id": "af07a1b6206c5478db7e6d3694bd2fc60536b659",
+      "name": "apexd.rc"
+    },
+    {
+      "mode": 33188,
+      "type": "blob",
+      "id": "aa9b120c588fae5ce919c50cc23c804a1025ad05",
+      "name": "apexd_brand_new_verifier.cpp"
+    },
+    {
+      "mode": 33188,
+      "type": "blob",
+      "id": "db38e25052ea14fc37f664089ee8d037c5984259",
+      "name": "apexd_brand_new_verifier.h"
+    },
+    {
+      "mode": 33188,
+      "type": "blob",
+      "id": "78d4675f0acc4221bea979a0879636203cc9e2fa",
+      "name": "apexd_brand_new_verifier_test.cpp"
+    },
+    {
+      "mode": 33188,
+      "type": "blob",
+      "id": "0b0528302fb2c7759c735eb8cd576b10d77e29a3",
+      "name": "apexd_checkpoint.h"
+    },
+    {
+      "mode": 33188,
+      "type": "blob",
+      "id": "22ebe78587a2b7087825335450710c1841192435",
+      "name": "apexd_checkpoint_vold.cpp"
+    },
+    {
+      "mode": 33188,
+      "type": "blob",
+      "id": "e18d77bb2fe939ab44f4e1f4ebcbc2126ab017dc",
+      "name": "apexd_checkpoint_vold.h"
+    },
+    {
+      "mode": 33188,
+      "type": "blob",
+      "id": "0d2e8358c4f53a2b38317e40bb4fe6c0ff88974d",
+      "name": "apexd_dm.cpp"
+    },
+    {
+      "mode": 33188,
+      "type": "blob",
+      "id": "8f7c9d32b9d7f5ad24386939c83f3caf4bfa1745",
+      "name": "apexd_dm.h"
+    },
+    {
+      "mode": 33188,
+      "type": "blob",
+      "id": "f18b3822b1e6425d323f51d804f254f360fd23d6",
+      "name": "apexd_lifecycle.cpp"
+    },
+    {
+      "mode": 33188,
+      "type": "blob",
+      "id": "75dc761264e997075272ff206bec68090b5c2998",
+      "name": "apexd_lifecycle.h"
+    },
+    {
+      "mode": 33188,
+      "type": "blob",
+      "id": "44a2f226b284c38c8846604bb5879f79c6dea7ca",
+      "name": "apexd_loop.cpp"
+    },
+    {
+      "mode": 33188,
+      "type": "blob",
+      "id": "14ff8a3f5b019d4bc6811fbac533def674e254dc",
+      "name": "apexd_loop.h"
+    },
+    {
+      "mode": 33188,
+      "type": "blob",
+      "id": "b123a95c56ede05df2180231fba01a427741d6f4",
+      "name": "apexd_main.cpp"
+    },
+    {
+      "mode": 33188,
+      "type": "blob",
+      "id": "fde6f9d3cdbeaa2351487bc46eb063d130eb45fc",
+      "name": "apexd_metrics.cpp"
+    },
+    {
+      "mode": 33188,
+      "type": "blob",
+      "id": "dce8c3d6126506888102567dd6cedd62a0cb09ce",
+      "name": "apexd_metrics.h"
+    },
+    {
+      "mode": 33188,
+      "type": "blob",
+      "id": "39bb81086ae504607dd8c90304830f426d4288c1",
+      "name": "apexd_metrics_stats.cpp"
+    },
+    {
+      "mode": 33188,
+      "type": "blob",
+      "id": "4e675b10e704a0d6f6c59552999b5e4f56f3c141",
+      "name": "apexd_metrics_stats.h"
+    },
+    {
+      "mode": 33188,
+      "type": "blob",
+      "id": "41f20f0500136270d3cbc1594bf08380636884bb",
+      "name": "apexd_microdroid.cpp"
+    },
+    {
+      "mode": 33188,
+      "type": "blob",
+      "id": "e6fdf255d6dbc3b66ea4f68420ac7ee5933f613c",
+      "name": "apexd_private.cpp"
+    },
+    {
+      "mode": 33188,
+      "type": "blob",
+      "id": "9d66f14352416657df49d96b257205227d5ccf24",
+      "name": "apexd_private.h"
+    },
+    {
+      "mode": 33188,
+      "type": "blob",
+      "id": "b4dffd2db88004a59f3b05933ec59aa1588d6739",
+      "name": "apexd_rollback_utils.h"
+    },
+    {
+      "mode": 33188,
+      "type": "blob",
+      "id": "2a44a332101a95e3e7341c75b12bcc62aec2af9a",
+      "name": "apexd_session.cpp"
+    },
+    {
+      "mode": 33188,
+      "type": "blob",
+      "id": "1fe10956221f0f6a1b38c267e968e3d644166290",
+      "name": "apexd_session.h"
+    },
+    {
+      "mode": 33188,
+      "type": "blob",
+      "id": "3ec36485cfb075cfa83e83a3de538890acdb1812",
+      "name": "apexd_session_test.cpp"
+    },
+    {
+      "mode": 33188,
+      "type": "blob",
+      "id": "2b49ca3fde0cd68b15e1e6fdc24e234eefdff94b",
+      "name": "apexd_test.cpp"
+    },
+    {
+      "mode": 33188,
+      "type": "blob",
+      "id": "693af9230cd5115aaba56f9f5441a8eee2b9c33b",
+      "name": "apexd_test_utils.h"
+    },
+    {
+      "mode": 16384,
+      "type": "tree",
+      "id": "bd56b9e88fa04efc04ffca6bb430d815be886d71",
+      "name": "apexd_testdata"
+    },
+    {
+      "mode": 33188,
+      "type": "blob",
+      "id": "322627741be99625167bec3f1b974dfb1d364c7c",
+      "name": "apexd_utils.h"
+    },
+    {
+      "mode": 33188,
+      "type": "blob",
+      "id": "e4ecc2ca4ebda7d1b5c67449786576f7fb97da85",
+      "name": "apexd_utils_test.cpp"
+    },
+    {
+      "mode": 33188,
+      "type": "blob",
+      "id": "88943c8b9adf8e5d29e24b410b7c50c47082eab5",
+      "name": "apexd_vendor_apex.cpp"
+    },
+    {
+      "mode": 33188,
+      "type": "blob",
+      "id": "d58657093b4540e6a4f733b16c0f932bcccb73b9",
+      "name": "apexd_vendor_apex.h"
+    },
+    {
+      "mode": 33188,
+      "type": "blob",
+      "id": "d0c4b2d53137c08fe75a406a8ad250a0edc705d4",
+      "name": "apexd_verity.cpp"
+    },
+    {
+      "mode": 33188,
+      "type": "blob",
+      "id": "aeedf5ec5ce830761047d5437ac02f8b92c321dc",
+      "name": "apexd_verity.h"
+    },
+    {
+      "mode": 33188,
+      "type": "blob",
+      "id": "404b9a2ec200377864d3f645e9f6d5cf411ef522",
+      "name": "apexservice.cpp"
+    },
+    {
+      "mode": 33188,
+      "type": "blob",
+      "id": "73c0f1f5e4f2edf42299c9b1ed435cb9c08d9834",
+      "name": "apexservice.h"
+    },
+    {
+      "mode": 33188,
+      "type": "blob",
+      "id": "8544044d3523aa4872f069e290158de82c3ed05e",
+      "name": "apexservice_test.cpp"
+    },
+    {
+      "mode": 33188,
+      "type": "blob",
+      "id": "8792c3d296f479860f226919bb7198c3130fc61e",
+      "name": "string_log.h"
+    },
+    {
+      "mode": 16384,
+      "type": "tree",
+      "id": "e64e976410740d8d9a3d735ef9a31cf1b7c14f28",
+      "name": "sysprop"
+    }
+  ]
+}

@@ -1,0 +1,240 @@
+)]}'
+{
+  "id": "d53495b97d1725ec9e1ac7cb80b78cd85ac99e0b",
+  "entries": [
+    {
+      "mode": 33188,
+      "type": "blob",
+      "id": "93a3b9dc4a96c527f06e6fe999e9f417961d6b6b",
+      "name": ".clang-format"
+    },
+    {
+      "mode": 16384,
+      "type": "tree",
+      "id": "4c9e62062613ef85abb54b147cbdae8cc14d011e",
+      "name": ".vscode"
+    },
+    {
+      "mode": 33188,
+      "type": "blob",
+      "id": "28043d5d2b1801930e2815074f6a3139aa20348f",
+      "name": "Android.bp"
+    },
+    {
+      "mode": 33188,
+      "type": "blob",
+      "id": "047cc45559d092ecba76d81a79ed22a42648c149",
+      "name": "AndroidProducts.mk"
+    },
+    {
+      "mode": 33188,
+      "type": "blob",
+      "id": "a21ed0a49af3aab2f462fcb860c711bc4199bc26",
+      "name": "CleanSpec.mk"
+    },
+    {
+      "mode": 33188,
+      "type": "blob",
+      "id": "50065d6b11aa61b3bb0893899c09707049e20099",
+      "name": "OWNERS"
+    },
+    {
+      "mode": 33188,
+      "type": "blob",
+      "id": "5298fd05463a387269e32391add7cd703928e3a8",
+      "name": "OWNERS_techleads"
+    },
+    {
+      "mode": 33188,
+      "type": "blob",
+      "id": "d90073fef9aff14a85cdf27d13b3bc9608f57ae1",
+      "name": "PREUPLOAD.cfg"
+    },
+    {
+      "mode": 33188,
+      "type": "blob",
+      "id": "1d9b6a7be6b484afc100a76e803fea513237310a",
+      "name": "README.md"
+    },
+    {
+      "mode": 33188,
+      "type": "blob",
+      "id": "345e46e16a43547f889a223ed968a04dd855a666",
+      "name": "TEST_MAPPING"
+    },
+    {
+      "mode": 16384,
+      "type": "tree",
+      "id": "63ab9bd9e2280d458d2a81a86a55c35427319850",
+      "name": "apex"
+    },
+    {
+      "mode": 16384,
+      "type": "tree",
+      "id": "7e91ee53b49b78aa07a1ccae9b15e1ada8c2a0b5",
+      "name": "build"
+    },
+    {
+      "mode": 16384,
+      "type": "tree",
+      "id": "06fd1a99c32e219bd17378fb0239758f69c9b88c",
+      "name": "common"
+    },
+    {
+      "mode": 33188,
+      "type": "blob",
+      "id": "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391",
+      "name": "debian_substitution_marker"
+    },
+    {
+      "mode": 33188,
+      "type": "blob",
+      "id": "a948e97bff051ab6ec6b6df871a885081cb82920",
+      "name": "default-permissions.xml"
+    },
+    {
+      "mode": 33188,
+      "type": "blob",
+      "id": "9d6cec7d3135bb94bac3b35d0ece24b07f5c056c",
+      "name": "dtb.img"
+    },
+    {
+      "mode": 16384,
+      "type": "tree",
+      "id": "3ddf1377688131e94f2d8d89f21bf9996afb0a61",
+      "name": "guest"
+    },
+    {
+      "mode": 16384,
+      "type": "tree",
+      "id": "d0989d5ff99e7502b97c9a63ade62960942e013b",
+      "name": "host"
+    },
+    {
+      "mode": 33188,
+      "type": "blob",
+      "id": "189b9f20a6a91a5691fc86e80c6d0d95fe7afd6b",
+      "name": "iwyu.imp"
+    },
+    {
+      "mode": 16384,
+      "type": "tree",
+      "id": "d2b9d5dff094a300fbeee946de4feba2e7a46207",
+      "name": "recovery"
+    },
+    {
+      "mode": 33188,
+      "type": "blob",
+      "id": "02fcd9e9fbd22931b33c81288cb312fa32d5b2d6",
+      "name": "required_images"
+    },
+    {
+      "mode": 40960,
+      "type": "blob",
+      "id": "475ba8fde76f71f9974bbc4626091747e35ec757",
+      "name": "rustfmt.toml"
+    },
+    {
+      "mode": 16384,
+      "type": "tree",
+      "id": "456184200481cb8b4838a93859d2471cf1086d1e",
+      "name": "shared"
+    },
+    {
+      "mode": 16384,
+      "type": "tree",
+      "id": "44e49bf009016f6d5f8ee52acf12f7b1e721fab9",
+      "name": "tests"
+    },
+    {
+      "mode": 16384,
+      "type": "tree",
+      "id": "5cce9260a4d1b972086d13851011014e287fc398",
+      "name": "tools"
+    },
+    {
+      "mode": 16384,
+      "type": "tree",
+      "id": "392e9a86de1cb6c478b99d7666b0a740db6433f6",
+      "name": "vsoc_arm"
+    },
+    {
+      "mode": 16384,
+      "type": "tree",
+      "id": "fc598548c33ba4125c13c3ff74c60beedc49f194",
+      "name": "vsoc_arm64"
+    },
+    {
+      "mode": 16384,
+      "type": "tree",
+      "id": "007eb1167e11e7f5f6ca63a443c7ecce05c478d0",
+      "name": "vsoc_arm64_minidroid"
+    },
+    {
+      "mode": 16384,
+      "type": "tree",
+      "id": "c51202ce09105854944ac8344e87952fcb1b0a38",
+      "name": "vsoc_arm64_only"
+    },
+    {
+      "mode": 16384,
+      "type": "tree",
+      "id": "f84558a46b8d1b9b1ca89dfe93635dca661ea473",
+      "name": "vsoc_arm64_pgagnostic"
+    },
+    {
+      "mode": 16384,
+      "type": "tree",
+      "id": "54f94dae2c871ce6c0d95afcc4cfe24a089de252",
+      "name": "vsoc_arm_minidroid"
+    },
+    {
+      "mode": 16384,
+      "type": "tree",
+      "id": "0a6d1ec8db967c9318efed032f7160b68df4f642",
+      "name": "vsoc_riscv64"
+    },
+    {
+      "mode": 16384,
+      "type": "tree",
+      "id": "bfbd55e2950ce620386a2e23f59cb98319eaffe8",
+      "name": "vsoc_riscv64_minidroid"
+    },
+    {
+      "mode": 16384,
+      "type": "tree",
+      "id": "57951f1d96be01d4d218b74c9b2d6519fa61c604",
+      "name": "vsoc_x86"
+    },
+    {
+      "mode": 16384,
+      "type": "tree",
+      "id": "b705193639e563b208335b923d547dce928dda18",
+      "name": "vsoc_x86_64"
+    },
+    {
+      "mode": 16384,
+      "type": "tree",
+      "id": "b397a46551a75aae05743c3583e7495e47efca0a",
+      "name": "vsoc_x86_64_host"
+    },
+    {
+      "mode": 16384,
+      "type": "tree",
+      "id": "9da0ab3f8104d3b050dd797abe5687422843d12b",
+      "name": "vsoc_x86_64_minidroid"
+    },
+    {
+      "mode": 16384,
+      "type": "tree",
+      "id": "4d2db1e074e949f606f332d9915539ef3ac24b9f",
+      "name": "vsoc_x86_64_only"
+    },
+    {
+      "mode": 16384,
+      "type": "tree",
+      "id": "1621335daa40bdf1d8a3b2de40982a7aea9c5f20",
+      "name": "vsoc_x86_64_pgagnostic"
+    }
+  ]
+}

@@ -1,0 +1,8 @@
+NOT_FOUND: Requested entity was not found
+[type.googleapis.com/google.rpc.LocalizedMessage]
+locale: "en-US"
+message: "Cannot parse URL as a Gitiles URL"
+
+[type.googleapis.com/google.rpc.RequestInfo]
+request_id: "27050b19a6fa4d979e6ce910590bc511"
+

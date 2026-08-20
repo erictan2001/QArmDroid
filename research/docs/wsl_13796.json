@@ -1,0 +1,110 @@
+{
+  "url": "https://api.github.com/repos/microsoft/WSL/issues/13796",
+  "repository_url": "https://api.github.com/repos/microsoft/WSL",
+  "labels_url": "https://api.github.com/repos/microsoft/WSL/issues/13796/labels{/name}",
+  "comments_url": "https://api.github.com/repos/microsoft/WSL/issues/13796/comments",
+  "events_url": "https://api.github.com/repos/microsoft/WSL/issues/13796/events",
+  "html_url": "https://github.com/microsoft/WSL/issues/13796",
+  "id": 3673494895,
+  "node_id": "I_kwDOA1DMt87a9RVv",
+  "number": 13796,
+  "title": "Nested virtualization is not supported on arm based machines",
+  "user": {
+    "login": "sr-kai",
+    "id": 11653683,
+    "node_id": "MDQ6VXNlcjExNjUzNjgz",
+    "avatar_url": "https://avatars.githubusercontent.com/u/11653683?v=4",
+    "gravatar_id": "",
+    "url": "https://api.github.com/users/sr-kai",
+    "html_url": "https://github.com/sr-kai",
+    "followers_url": "https://api.github.com/users/sr-kai/followers",
+    "following_url": "https://api.github.com/users/sr-kai/following{/other_user}",
+    "gists_url": "https://api.github.com/users/sr-kai/gists{/gist_id}",
+    "starred_url": "https://api.github.com/users/sr-kai/starred{/owner}{/repo}",
+    "subscriptions_url": "https://api.github.com/users/sr-kai/subscriptions",
+    "organizations_url": "https://api.github.com/users/sr-kai/orgs",
+    "repos_url": "https://api.github.com/users/sr-kai/repos",
+    "events_url": "https://api.github.com/users/sr-kai/events{/privacy}",
+    "received_events_url": "https://api.github.com/users/sr-kai/received_events",
+    "type": "User",
+    "user_view_type": "public",
+    "site_admin": false
+  },
+  "labels": [
+    {
+      "id": 1374725358,
+      "node_id": "MDU6TGFiZWwxMzc0NzI1MzU4",
+      "url": "https://api.github.com/repos/microsoft/WSL/labels/needs-author-feedback",
+      "name": "needs-author-feedback",
+      "color": "FFEC00",
+      "default": false,
+      "description": ""
+    }
+  ],
+  "state": "closed",
+  "locked": false,
+  "assignees": [
+
+  ],
+  "milestone": null,
+  "comments": 2,
+  "created_at": "2025-11-28T03:27:47Z",
+  "updated_at": "2025-12-04T03:32:16Z",
+  "closed_at": "2025-12-04T03:32:16Z",
+  "assignee": null,
+  "author_association": "NONE",
+  "issue_field_values": [
+
+  ],
+  "type": null,
+  "active_lock_reason": null,
+  "sub_issues_summary": {
+    "total": 0,
+    "completed": 0,
+    "percent_completed": 0
+  },
+  "issue_dependencies_summary": {
+    "blocked_by": 0,
+    "total_blocked_by": 0,
+    "blocking": 0,
+    "total_blocking": 0
+  },
+  "body": "### Windows Version\n\nMicrosoft Windows [Version 10.0.26100.7171]\n\n### WSL Version\n\n2.6.1.0\n\n### Are you using WSL 1 or WSL 2?\n\n- [x] WSL 2\n- [ ] WSL 1\n\n### Kernel Version\n\n_No response_\n\n### Distro Version\n\nDebian/Ubuntu\n\n### Other Software\n\nEven with the option enabled, WSL on snapdargon processor doesn't seem to support nested virutalization\n\n### Repro Steps\n\nEnable nested virtualization, launch any WSL container\n\n### Expected Behavior\n\nINFO: /dev/kvm exists\nKVM acceleration can be used\n\n### Actual Behavior\n\nINFO: /dev/kvm does not exist\nHINT:   sudo modprobe kvm\nmodprobe: FATAL: Module msr not found in directory /lib/modules/6.6.87.2-microsoft-standard-WSL2\n\n### Diagnostic Logs\n\n_No response_",
+  "closed_by": {
+    "login": "benhillis",
+    "id": 17727402,
+    "node_id": "MDQ6VXNlcjE3NzI3NDAy",
+    "avatar_url": "https://avatars.githubusercontent.com/u/17727402?v=4",
+    "gravatar_id": "",
+    "url": "https://api.github.com/users/benhillis",
+    "html_url": "https://github.com/benhillis",
+    "followers_url": "https://api.github.com/users/benhillis/followers",
+    "following_url": "https://api.github.com/users/benhillis/following{/other_user}",
+    "gists_url": "https://api.github.com/users/benhillis/gists{/gist_id}",
+    "starred_url": "https://api.github.com/users/benhillis/starred{/owner}{/repo}",
+    "subscriptions_url": "https://api.github.com/users/benhillis/subscriptions",
+    "organizations_url": "https://api.github.com/users/benhillis/orgs",
+    "repos_url": "https://api.github.com/users/benhillis/repos",
+    "events_url": "https://api.github.com/users/benhillis/events{/privacy}",
+    "received_events_url": "https://api.github.com/users/benhillis/received_events",
+    "type": "User",
+    "user_view_type": "public",
+    "site_admin": false
+  },
+  "reactions": {
+    "url": "https://api.github.com/repos/microsoft/WSL/issues/13796/reactions",
+    "total_count": 0,
+    "+1": 0,
+    "-1": 0,
+    "laugh": 0,
+    "hooray": 0,
+    "confused": 0,
+    "heart": 0,
+    "rocket": 0,
+    "eyes": 0
+  },
+  "timeline_url": "https://api.github.com/repos/microsoft/WSL/issues/13796/timeline",
+  "performed_via_github_app": null,
+  "state_reason": "completed",
+  "pinned_comment": null
+}

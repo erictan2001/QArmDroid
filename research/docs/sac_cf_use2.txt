@@ -1,0 +1,630 @@
+
+
+ Get started  |  Android Open Source Project
+
+ Skip to main content
+
+ Docs
+
+What's new?
+
+ Release notes
+
+ Latest security bulletins
+
+ Latest Compatibility Definition Document (CDD)
+
+ Site updates
+
+Getting Started
+
+ About
+
+ Start
+
+ Download
+
+ Builds
+
+ Test
+
+ Create
+
+ Contribute
+
+ Community
+
+ Tools, build, and related reference
+
+Security
+
+ Overview
+
+ Bulletins
+
+ Features
+
+ Testing
+
+ Best Practices
+
+Core Topics
+
+ Architecture
+
+ Audio
+
+ Camera
+
+ Connectivity
+
+ Data
+
+ Display
+
+ Fonts
+
+ Graphics
+
+ Interaction
+
+ Media
+
+ Performance
+
+ Permissions
+
+ Power
+
+ Runtime
+
+ Settings
+
+ Storage
+
+ Tests
+
+ Updates
+
+ Virtualization
+
+Compatibility
+
+ Compatibility Definition Document (CDD)
+
+ Compatibility Test Suite (CTS)
+
+Android Devices
+
+ Cuttlefish
+
+ Enterprise
+
+ TV
+
+Automotive
+
+ Overview
+
+ Software Defined Vehicle
+
+ In-vehicle Infotainment
+
+ Release Details
+
+Reference
+
+ HIDL
+
+ HAL
+
+ Trade Federation
+
+ Security Test Suite
+
+ Android Code Search
+
+ /
+
+ English
+
+ Deutsch
+
+ Español – América Latina
+
+ Français
+
+ Indonesia
+
+ Italiano
+
+ Polski
+
+ Português – Brasil
+
+ Tiếng Việt
+
+ Türkçe
+
+ Русский
+
+ עברית
+
+ العربيّة
+
+ فارسی
+
+ हिंदी
+
+ বাংলা
+
+ ภาษาไทย
+
+ 中文 – 简体
+
+ 中文 – 繁體
+
+ 日本語
+
+ 한국어
+
+ Sign in
+
+ Documentation
+
+ What's New?
+
+ Getting Started
+
+ Security
+
+ Core Topics
+
+ Compatibility
+
+ Android Devices
+
+ Automotive
+
+ Reference
+
+ Docs
+
+ More
+
+ What's New?
+
+ Getting Started
+
+ Security
+
+ Core Topics
+
+ Compatibility
+
+ Android Devices
+
+ Automotive
+
+ Reference
+
+ Android Code Search
+
+Overview
+
+ Cuttlefish
+
+Overview
+
+ Basics
+
+Get started
+Restart and reset
+Snapshot and restore
+GPU graphics acceleration
+Control panel
+WebRTC streaming
+Run CTS stable
+
+ Edit-compile-run cycle
+
+Create a custom device
+Develop Android kernel
+Develop Android bootloader features
+
+ Virtual hardware
+
+Display hotplug
+Multi-display
+Multi-tenancy
+Environment control
+Test connectivity of multiple devices
+Wi-Fi
+Bluetooth
+NFC
+
+ Cuttlefish hybrid devices
+
+Create a Cuttlefish hybrid device
+Run Cuttlefish on an on-premise server
+
+ Enterprise
+
+Device management overview
+Device management
+Device policy resolution framework
+Support multiple users
+Implement custom user types
+Test multiple users
+Employ work profiles
+Provision for device management
+Multiuser apps
+Enterprise telephony
+Test device management
+Enterprise OTA updates
+
+ TV
+
+Overview
+Tuner framework
+CAS framework
+HDMI-CEC control service
+Multimedia tunneling
+Reference TV app
+Customize the TV app
+
+ What's new?
+
+ Release notes
+
+ Latest security bulletins
+
+ Latest Compatibility Definition Document (CDD)
+
+ Site updates
+
+ Getting Started
+
+ About
+
+ Start
+
+ Download
+
+ Builds
+
+ Test
+
+ Create
+
+ Contribute
+
+ Community
+
+ Tools, build, and related reference
+
+ Security
+
+ Overview
+
+ Bulletins
+
+ Features
+
+ Testing
+
+ Best Practices
+
+ Core Topics
+
+ Architecture
+
+ Audio
+
+ Camera
+
+ Connectivity
+
+ Data
+
+ Display
+
+ Fonts
+
+ Graphics
+
+ Interaction
+
+ Media
+
+ Performance
+
+ Permissions
+
+ Power
+
+ Runtime
+
+ Settings
+
+ Storage
+
+ Tests
+
+ Updates
+
+ Virtualization
+
+ Compatibility
+
+ Compatibility Definition Document (CDD)
+
+ Compatibility Test Suite (CTS)
+
+ Android Devices
+
+ Cuttlefish
+
+ Enterprise
+
+ TV
+
+ Automotive
+
+ Overview
+
+ Software Defined Vehicle
+
+ In-vehicle Infotainment
+
+ Release Details
+
+ Reference
+
+ HIDL
+
+ HAL
+
+ Trade Federation
+
+ Security Test Suite
+
+Effective in 2026, to align with our trunk stable development model and ensure platform stability for the ecosystem, we will publish source code to AOSP in Q2 and Q4. For building and contributing to AOSP, use android-latest-release. The android-latest-release manifest branch will always reference the most recent release pushed to AOSP. For more information, see Changes to AOSP.
+
+ AOSP
+
+ Docs
+
+ Android Devices
+
+ Get started
+
+ Stay organized with collections
+
+ Save and categorize content based on your preferences.
+
+This page describes how to launch an AOSP build using
+Cuttlefish.
+
+Verify KVM availability
+
+Cuttlefish is a virtual device and is dependent on virtualization being
+available on the host machine.
+
+In a terminal on your host machine, make sure that virtualization with a
+Kernel-based Virtual Machine (KVM) is available:
+
+grep -c -w "vmx\|svm" /proc/cpuinfo
+
+This command should return a nonzero value.
+Note: On a cloud machine, you might need to follow cloud-specific or
+vendor-specific steps to enable KVM. For Google Compute Engine (GCE), see
+About nested virtualization.
+
+When running on an ARM64 machine, the most direct way is to check for
+/dev/kvm:
+
+find /dev -name kvm
+Tip: You can use this command to confirm support of KVM on any environment.
+
+Launch Cuttlefish
+
+In a terminal window, download, build, and install the host Debian packages:
+
+sudo apt install -y git devscripts equivs config-package-dev debhelper-compat golang curl
+git clone https://github.com/google/android-cuttlefish
+cd android-cuttlefish
+tools/buildutils/build_packages.sh
+sudo dpkg -i ./cuttlefish-base_*_*64.deb || sudo apt-get install -f
+sudo dpkg -i ./cuttlefish-user_*_*64.deb || sudo apt-get install -f
+sudo usermod -aG kvm,cvdnetwork,render $USER
+sudo reboot
+
+The reboot triggers installing additional kernel modules and applies udev
+rules.
+
+Cuttlefish is part of the Android Open-Source Platform (AOSP). Builds of
+the virtual device are found at the Android Continuous Integration site. To
+find an index of all Android builds, navigate to the Android Continuous
+Integration site at
+http://ci.android.com/.
+
+Enter a branch name. Use the default aosp-android-latest-release branch or
+use a generic system image (GSI) branch
+such as aosp-android13-gsi.
+
+Navigate to the aosp_cf_x86_64_only_phone build target and click
+userdebug for the latest build.
+Tip: For ARM64, use the branch aosp-android-latest-release and the device
+target aosp_cf_arm64_only_phone-userdebug.
+
+Click the green box below userdebug to select this build. A Details
+panel appears with more information specific to
+this build. In this panel, click Artifacts to see a list of all the
+artifacts attached to this build.
+
+In the Artifacts panel, download the artifacts for Cuttlefish.
+
+Click the aosp_cf_x86_64_phone-img-xxxxxx.zip artifact for x86_64 or
+the aosp_cf_arm64_only_phone-xxxxxx.zip artifact for ARM64, which
+contains the device images. In the filename, "xxxxxx" is the build
+ID for this device.
+
+Scroll down in the panel and download cvd-host_package.tar.gz. Always
+download the host package from the same build as your images.
+
+On your local system, create a container folder and extract the packages:
+
+x86_64 architecture:
+
+mkdir cf
+cd cf
+tar -xvf /path/to/cvd-host_package.tar.gz
+unzip /path/to/aosp_cf_x86_64_phone-img-xxxxxx.zip
+
+ARM64 architecture:
+
+mkdir cf
+cd cf
+tar -xvf /path/to/cvd-host_package.tar.gz
+unzip /path/to/aosp_cf_arm64_only_phone-img-xxxxxx.zip
+
+Launch Cuttlefish:
+
+HOME=$PWD ./bin/launch_cvd --daemon
+
+Verify that Cuttlefish is visible through adb
+
+Similar to a physical device, Cuttlefish is visible through the
+Android Debug Bridge (adb).
+
+In the same folder where you launched Cuttlefish, run the following
+command to see a list of all the Android devices available through adb on your
+host machine:
+
+./bin/adb devices
+
+View and interact with the virtual device in the web
+
+By default, Cuttlefish launches with --start_webrtc, which enables a webview
+through port 8443 on the host machine.
+
+To view and interact with your virtual devices, navigate to
+https://localhost:8443 in your web browser.
+
+For more information, see
+Cuttlefish: WebRTC Streaming.
+
+Stop Cuttlefish
+
+Stop the virtual device within the same directory as you used to launch the
+device:
+
+HOME=$PWD ./bin/stop_cvd
+
+Content and code samples on this page are subject to the licenses described in the Content License. Java and OpenJDK are trademarks or registered trademarks of Oracle and/or its affiliates.
+
+Last updated 2026-06-17 UTC.
+
+ [[["Easy to understand","easyToUnderstand","thumb-up"],["Solved my problem","solvedMyProblem","thumb-up"],["Other","otherUp","thumb-up"]],[["Missing the information I need","missingTheInformationINeed","thumb-down"],["Too complicated / too many steps","tooComplicatedTooManySteps","thumb-down"],["Out of date","outOfDate","thumb-down"],["Samples / code issue","samplesCodeIssue","thumb-down"],["Other","otherDown","thumb-down"]],["Last updated 2026-06-17 UTC."],[],[]]
+
+Build
+
+ Android repository
+
+ Requirements
+
+ Downloading
+
+ Preview binaries
+
+ Factory images
+
+ Driver binaries
+
+Connect
+
+ @Android on X
+
+ @AndroidDev on X
+
+ Android Blog
+
+ Google Security Blog
+
+ Platform on Google Groups
+
+ Building on Google Groups
+
+ Porting on Google Groups
+
+Get help
+
+ Android Help Center
+
+ Pixel Help Center
+
+ www.android.com
+
+ Google Mobile Services
+
+ Stack Overflow
+
+ Issue Tracker
+
+ About Android
+
+ Community
+
+ Legal
+
+ License
+
+ Privacy
+
+ Site feedback
+
+ Manage cookies
+
+ English
+
+ Deutsch
+
+ Español – América Latina
+
+ Français
+
+ Indonesia
+
+ Italiano
+
+ Polski
+
+ Português – Brasil
+
+ Tiếng Việt
+
+ Türkçe
+
+ Русский
+
+ עברית
+
+ العربيّة
+
+ فارسی
+
+ हिंदी
+
+ বাংলা
+
+ ภาษาไทย
+
+ 中文 – 简体
+
+ 中文 – 繁體
+
+ 日本語
+
+ 한국어
+

@@ -1,0 +1,602 @@
+
+
+ Cuttlefish virtual Android devices  |  Android Open Source Project
+
+ Skip to main content
+
+ Docs
+
+What's new?
+
+ Release notes
+
+ Latest security bulletins
+
+ Latest Compatibility Definition Document (CDD)
+
+ Site updates
+
+Getting Started
+
+ About
+
+ Start
+
+ Download
+
+ Builds
+
+ Test
+
+ Create
+
+ Contribute
+
+ Community
+
+ Tools, build, and related reference
+
+Security
+
+ Overview
+
+ Bulletins
+
+ Features
+
+ Testing
+
+ Best Practices
+
+Core Topics
+
+ Architecture
+
+ Audio
+
+ Camera
+
+ Connectivity
+
+ Data
+
+ Display
+
+ Fonts
+
+ Graphics
+
+ Interaction
+
+ Media
+
+ Performance
+
+ Permissions
+
+ Power
+
+ Runtime
+
+ Settings
+
+ Storage
+
+ Tests
+
+ Updates
+
+ Virtualization
+
+Compatibility
+
+ Compatibility Definition Document (CDD)
+
+ Compatibility Test Suite (CTS)
+
+Android Devices
+
+ Cuttlefish
+
+ Enterprise
+
+ TV
+
+Automotive
+
+ Overview
+
+ Software Defined Vehicle
+
+ In-vehicle Infotainment
+
+ Release Details
+
+Reference
+
+ HIDL
+
+ HAL
+
+ Trade Federation
+
+ Security Test Suite
+
+ Android Code Search
+
+ /
+
+ English
+
+ Deutsch
+
+ Español – América Latina
+
+ Français
+
+ Indonesia
+
+ Italiano
+
+ Polski
+
+ Português – Brasil
+
+ Tiếng Việt
+
+ Türkçe
+
+ Русский
+
+ עברית
+
+ العربيّة
+
+ فارسی
+
+ हिंदी
+
+ বাংলা
+
+ ภาษาไทย
+
+ 中文 – 简体
+
+ 中文 – 繁體
+
+ 日本語
+
+ 한국어
+
+ Sign in
+
+ Documentation
+
+ What's New?
+
+ Getting Started
+
+ Security
+
+ Core Topics
+
+ Compatibility
+
+ Android Devices
+
+ Automotive
+
+ Reference
+
+ Docs
+
+ More
+
+ What's New?
+
+ Getting Started
+
+ Security
+
+ Core Topics
+
+ Compatibility
+
+ Android Devices
+
+ Automotive
+
+ Reference
+
+ Android Code Search
+
+Overview
+
+ Cuttlefish
+
+Overview
+
+ Basics
+
+Get started
+Restart and reset
+Snapshot and restore
+GPU graphics acceleration
+Control panel
+WebRTC streaming
+Run CTS stable
+
+ Edit-compile-run cycle
+
+Create a custom device
+Develop Android kernel
+Develop Android bootloader features
+
+ Virtual hardware
+
+Display hotplug
+Multi-display
+Multi-tenancy
+Environment control
+Test connectivity of multiple devices
+Wi-Fi
+Bluetooth
+NFC
+
+ Cuttlefish hybrid devices
+
+Create a Cuttlefish hybrid device
+Run Cuttlefish on an on-premise server
+
+ Enterprise
+
+Device management overview
+Device management
+Device policy resolution framework
+Support multiple users
+Implement custom user types
+Test multiple users
+Employ work profiles
+Provision for device management
+Multiuser apps
+Enterprise telephony
+Test device management
+Enterprise OTA updates
+
+ TV
+
+Overview
+Tuner framework
+CAS framework
+HDMI-CEC control service
+Multimedia tunneling
+Reference TV app
+Customize the TV app
+
+ What's new?
+
+ Release notes
+
+ Latest security bulletins
+
+ Latest Compatibility Definition Document (CDD)
+
+ Site updates
+
+ Getting Started
+
+ About
+
+ Start
+
+ Download
+
+ Builds
+
+ Test
+
+ Create
+
+ Contribute
+
+ Community
+
+ Tools, build, and related reference
+
+ Security
+
+ Overview
+
+ Bulletins
+
+ Features
+
+ Testing
+
+ Best Practices
+
+ Core Topics
+
+ Architecture
+
+ Audio
+
+ Camera
+
+ Connectivity
+
+ Data
+
+ Display
+
+ Fonts
+
+ Graphics
+
+ Interaction
+
+ Media
+
+ Performance
+
+ Permissions
+
+ Power
+
+ Runtime
+
+ Settings
+
+ Storage
+
+ Tests
+
+ Updates
+
+ Virtualization
+
+ Compatibility
+
+ Compatibility Definition Document (CDD)
+
+ Compatibility Test Suite (CTS)
+
+ Android Devices
+
+ Cuttlefish
+
+ Enterprise
+
+ TV
+
+ Automotive
+
+ Overview
+
+ Software Defined Vehicle
+
+ In-vehicle Infotainment
+
+ Release Details
+
+ Reference
+
+ HIDL
+
+ HAL
+
+ Trade Federation
+
+ Security Test Suite
+
+Effective in 2026, to align with our trunk stable development model and ensure platform stability for the ecosystem, we will publish source code to AOSP in Q2 and Q4. For building and contributing to AOSP, use android-latest-release. The android-latest-release manifest branch will always reference the most recent release pushed to AOSP. For more information, see Changes to AOSP.
+
+ AOSP
+
+ Docs
+
+ Android Devices
+
+ Cuttlefish virtual Android devices
+
+ Stay organized with collections
+
+ Save and categorize content based on your preferences.
+
+Cuttlefish is a configurable virtual Android-powered device that can run
+both remotely (using third-party cloud offerings such as Google Cloud Engine)
+and locally (on Linux x86 and ARM64 machines).
+
+Cuttlefish goals
+
+Free the platform and app developer from being dependent on physical
+hardware to develop and validate code changes.
+
+Replicate the framework-based behavior of a real device with a focus on
+high fidelity by maintaining close alignment with the core framework.
+
+Support all API levels after 28.
+
+Provide a consistent level of functionality across API levels, aligned
+with the behavior on physical hardware.
+
+Enable scale:
+
+Provide the ability to run multiple devices in parallel.
+
+Enable concurrent test execution with high fidelity at a lower cost of
+entry.
+
+Provide a configurable device with the ability to adjust things like form
+factor, RAM, and CPUs.
+
+Compare Cuttlefish to other devices
+
+This section compares Cuttlefish to other devices.
+
+Cuttlefish and Android Emulator
+
+There are many similarities with the Android Emulator,
+but Cuttlefish has full fidelity with Android Framework (whether this is
+pure AOSP or a custom implementation in your own tree). In real-world
+application, this means that you should expect Cuttlefish to respond to your
+interactions at the OS level just like a physical phone target built with the
+same customized or pure Android OS source.
+
+The Android Emulator has been built around the use case of making app
+development easy, and it contains many functional hooks to appeal to the use
+cases of the Android app developer. This can present challenges if you want
+to build an emulator with your customized Android framework. If you need a
+virtual device that is representative of your custom platform or framework
+code or tip-of-tree Android, then Cuttlefish is an ideal virtual option.
+Cuttlefish is the canonical device for representing the current state of
+AOSP development.
+
+Cuttlefish and physical device
+
+The primary differences between a Cuttlefish virtual device and your physical
+device are at the hardware abstraction layer (HAL) level, as well as any
+software that interacts with any custom hardware. Except for hardware-specific
+implementations, you should expect functionally equivalent behavior between
+Cuttlefish and a physical device.
+
+How Cuttlefish can help
+
+You can interact with Cuttlefish just like you would with any other Android
+device that you might use for debugging. It registers itself as a normal
+device with adb and you can interact with it like a physical device with remote
+desktop. The use cases are broad and can span app testing, custom system
+build testing and more.
+
+Because Cuttlefish strives for full framework fidelity, it can be used for
+functional testing of your framework or apps where there are no
+physical hardware dependencies that are impossible to emulate.
+
+How Cuttlefish is used for testing today
+
+Some common applications of Cuttlefish for testing include:
+
+CTS
+
+Framework compliance
+
+Continuous integration testing
+
+Custom test suites
+
+Host Cuttlefish in the cloud
+
+Cuttlefish natively supports Google Cloud and support for other cloud
+platforms is planned.
+
+Get started
+
+For guidance on creating a Cuttlefish instance based on AOSP, see
+Use Cuttlefish.
+
+Content and code samples on this page are subject to the licenses described in the Content License. Java and OpenJDK are trademarks or registered trademarks of Oracle and/or its affiliates.
+
+Last updated 2026-07-16 UTC.
+
+ [[["Easy to understand","easyToUnderstand","thumb-up"],["Solved my problem","solvedMyProblem","thumb-up"],["Other","otherUp","thumb-up"]],[["Missing the information I need","missingTheInformationINeed","thumb-down"],["Too complicated / too many steps","tooComplicatedTooManySteps","thumb-down"],["Out of date","outOfDate","thumb-down"],["Samples / code issue","samplesCodeIssue","thumb-down"],["Other","otherDown","thumb-down"]],["Last updated 2026-07-16 UTC."],[],[]]
+
+Build
+
+ Android repository
+
+ Requirements
+
+ Downloading
+
+ Preview binaries
+
+ Factory images
+
+ Driver binaries
+
+Connect
+
+ @Android on X
+
+ @AndroidDev on X
+
+ Android Blog
+
+ Google Security Blog
+
+ Platform on Google Groups
+
+ Building on Google Groups
+
+ Porting on Google Groups
+
+Get help
+
+ Android Help Center
+
+ Pixel Help Center
+
+ www.android.com
+
+ Google Mobile Services
+
+ Stack Overflow
+
+ Issue Tracker
+
+ About Android
+
+ Community
+
+ Legal
+
+ License
+
+ Privacy
+
+ Site feedback
+
+ Manage cookies
+
+ English
+
+ Deutsch
+
+ Español – América Latina
+
+ Français
+
+ Indonesia
+
+ Italiano
+
+ Polski
+
+ Português – Brasil
+
+ Tiếng Việt
+
+ Türkçe
+
+ Русский
+
+ עברית
+
+ العربيّة
+
+ فارسی
+
+ हिंदी
+
+ বাংলা
+
+ ภาษาไทย
+
+ 中文 – 简体
+
+ 中文 – 繁體
+
+ 日本語
+
+ 한국어
+

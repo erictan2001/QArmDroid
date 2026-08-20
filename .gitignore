@@ -1,5 +1,5 @@
-# Logs
-logs
+# Logs & Debug
+logs/
 *.log
 npm-debug.log*
 yarn-debug.log*
@@ -7,32 +7,38 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
-# JS
-node_modules
-dist
-dist-ssr
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+
+# JS / Frontend
+node_modules/
+dist/
+dist-ssr/
 *.local
 
-# Rust
+# Rust & Tauri
 src-tauri/target/
 
-# Android images & artifacts (large binaries, downloaded not authored)
+# Android Images & Heavy Disk Binaries (downloaded / runtime generated)
 aosp_cf_arm64_only_phone-img/
+images/
 *.zip
 *.img
+*.raw
 !public/**/*.img
 fetch_cvd
-
-# Runtime artifacts
 combined_initrd.img
-*.lock
 adb_keys
 
-# Editor directories and files
+# IDE & OS Files
 .vscode/*
 !.vscode/extensions.json
-.idea
+.idea/
 .DS_Store
+Thumbs.db
 *.suo
 *.ntvs*
 *.njsproj
