@@ -490,6 +490,28 @@ static void child_loop(void)
                 sys4(33 /* SYS_mknodat */, AT_FDCWD, (long)"/dev/ttyS1", 0666 | 0x2000 /* S_IFCHR */, (1 << 8) | 3 /* /dev/null */);
                 sys4(33 /* SYS_mknodat */, AT_FDCWD, (long)"/dev/ttyAMA1", 0666 | 0x2000 /* S_IFCHR */, (204 << 8) | 65 /* ttyAMA1 */);
                 sys3(36 /* SYS_symlinkat */, (long)"/dev/block/vda19", AT_FDCWD, (long)"/dev/block/by-name/frp");
+
+                /* Set up IDC files so QEMU Virtio Tablet is recognized as a direct touchscreen */
+                sys3(34 /* SYS_mkdirat */, AT_FDCWD, (long)"/vendor/usr", 0755);
+                sys5(40 /* SYS_mount */, (long)"tmpfs", (long)"/vendor/usr", (long)"tmpfs", 0, 0);
+                sys3(34 /* SYS_mkdirat */, AT_FDCWD, (long)"/vendor/usr/idc", 0755);
+
+                const char idc_data[] = "touch.deviceType = touchScreen\ntouch.orientationAware = 1\n";
+                const char *idc_names[] = {
+                    "/vendor/usr/idc/QEMU_Virtio_Tablet.idc",
+                    "/vendor/usr/idc/Vendor_0627_Product_0003.idc",
+                    "/vendor/usr/idc/QEMU_Virtio_Mouse.idc",
+                    "/vendor/usr/idc/Vendor_0627_Product_0001.idc",
+                    0
+                };
+                for (int j = 0; idc_names[j]; j++) {
+                    int idcfd = (int)sys4(SYS_openat, AT_FDCWD, (long)idc_names[j], 65 /* O_WRONLY|O_CREAT|O_TRUNC */, 0644);
+                    if (idcfd >= 0) {
+                        sys3(SYS_write, idcfd, (long)idc_data, sizeof(idc_data) - 1);
+                        sys1(SYS_close, idcfd);
+                    }
+                }
+                klog("arm64droid-init: created touchscreen IDC files in /vendor/usr/idc!\n");
             }
         }
 

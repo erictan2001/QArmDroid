@@ -66,6 +66,7 @@ export function App() {
       rfb.resizeSession = false;
       rfb.clipViewport = false;
       rfb.focusOnClick = true;
+      rfb.viewOnly = false;
       rfb.background = "#0f172a";
 
       rfb.addEventListener("connect", () => {
