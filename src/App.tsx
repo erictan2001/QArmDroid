@@ -65,14 +65,14 @@ export function App() {
       rfb.scaleViewport = true;
       rfb.resizeSession = false;
       rfb.clipViewport = false;
-      rfb.focusOnClick = true;
-      rfb.viewOnly = false;
+      rfb.focusOnClick = false;
+      rfb.viewOnly = true;        // Direct input is handled natively via ADB for 100% precision
       rfb.background = "#0f172a";
 
       rfb.addEventListener("connect", () => {
         setConnecting(false);
         setConnected(true);
-        setLogMsg("Connected to Android display (Ultra-low latency mode)");
+        setLogMsg("Connected to Android display (Direct Touch Control Active)");
       });
 
       rfb.addEventListener("disconnect", (e: any) => {
@@ -91,6 +91,66 @@ export function App() {
   };
 
   const [optimized, setOptimized] = useState(false);
+  const pointerState = useRef<{ x: number; y: number; time: number } | null>(null);
+
+  const getAndroidCoords = (e: React.PointerEvent<HTMLDivElement>) => {
+    const container = screenRef.current;
+    if (!container) return null;
+    const canvas = container.querySelector("canvas") || container;
+    const rect = canvas.getBoundingClientRect();
+    if (rect.width === 0 || rect.height === 0) return null;
+
+    const rawX = e.clientX - rect.left;
+    const rawY = e.clientY - rect.top;
+
+    if (rawX < 0 || rawX > rect.width || rawY < 0 || rawY > rect.height) return null;
+
+    const androidX = Math.round((rawX / rect.width) * 1280);
+    const androidY = Math.round((rawY / rect.height) * 800);
+
+    return { x: Math.max(0, Math.min(1280, androidX)), y: Math.max(0, Math.min(800, androidY)) };
+  };
+
+  const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (displayMode !== "embedded" || !connected) return;
+    const coords = getAndroidCoords(e);
+    if (coords) {
+      pointerState.current = { x: coords.x, y: coords.y, time: Date.now() };
+    }
+  };
+
+  const handlePointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (displayMode !== "embedded" || !connected || !pointerState.current) return;
+    const coords = getAndroidCoords(e);
+    const start = pointerState.current;
+    pointerState.current = null;
+
+    if (!coords) return;
+
+    const dx = coords.x - start.x;
+    const dy = coords.y - start.y;
+    const dist = Math.hypot(dx, dy);
+    const duration = Date.now() - start.time;
+
+    if (dist < 12) {
+      // Single tap
+      invoke("send_touch_tap", { x: coords.x, y: coords.y }).catch((err) => {
+        setLogMsg(`Tap error: ${err}`);
+      });
+    } else {
+      // Swipe / Drag gesture
+      const dur = Math.max(100, Math.min(800, duration));
+      invoke("send_touch_swipe", {
+        x1: start.x,
+        y1: start.y,
+        x2: coords.x,
+        y2: coords.y,
+        durationMs: dur
+      }).catch((err) => {
+        setLogMsg(`Swipe error: ${err}`);
+      });
+    }
+  };
 
   // Auto-connect when VNC port becomes ready in embedded mode
   useEffect(() => {
@@ -235,9 +295,14 @@ export function App() {
 
       {/* Main Workspace: Screen Viewport + Android Control Bar */}
       <main className="main-viewport">
-        <div className="screen-wrapper">
+        <div className="screen-wrapper" onPointerDown={handlePointerDown} onPointerUp={handlePointerUp}>
           {/* RFB Canvas mount point */}
-          <div ref={screenRef} className="vnc-canvas-container" />
+          <div
+            ref={screenRef}
+            className="vnc-canvas-container"
+            onPointerDown={handlePointerDown}
+            onPointerUp={handlePointerUp}
+          />
 
           {/* Placeholder overlay when not connected or in SDL mode */}
           {(!connected || displayMode === "sdl") && (

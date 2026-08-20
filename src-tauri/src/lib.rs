@@ -148,6 +148,41 @@ fn send_adb_text(text: String) -> Result<String, String> {
 }
 
 #[tauri::command]
+fn send_touch_tap(x: u32, y: u32) -> Result<String, String> {
+    let output = Command::new("adb")
+        .args(&["-s", "127.0.0.1:5555", "shell", "input", "tap", &x.to_string(), &y.to_string()])
+        .output()
+        .map_err(|e| format!("ADB error: {}", e))?;
+
+    if output.status.success() {
+        Ok("Tap sent".to_string())
+    } else {
+        Err(String::from_utf8_lossy(&output.stderr).to_string())
+    }
+}
+
+#[tauri::command]
+fn send_touch_swipe(x1: u32, y1: u32, x2: u32, y2: u32, duration_ms: Option<u32>) -> Result<String, String> {
+    let dur = duration_ms.unwrap_or(200).to_string();
+    let output = Command::new("adb")
+        .args(&[
+            "-s", "127.0.0.1:5555", 
+            "shell", "input", "swipe", 
+            &x1.to_string(), &y1.to_string(), 
+            &x2.to_string(), &y2.to_string(), 
+            &dur
+        ])
+        .output()
+        .map_err(|e| format!("ADB error: {}", e))?;
+
+    if output.status.success() {
+        Ok("Swipe sent".to_string())
+    } else {
+        Err(String::from_utf8_lossy(&output.stderr).to_string())
+    }
+}
+
+#[tauri::command]
 fn optimize_performance() -> Result<String, String> {
     // Disable window, transition, and animator scales in Android guest for instant UI responsiveness
     let _ = Command::new("adb")
@@ -167,6 +202,8 @@ pub fn run() {
             get_emulator_status,
             send_adb_key,
             send_adb_text,
+            send_touch_tap,
+            send_touch_swipe,
             optimize_performance
         ])
         .run(tauri::generate_context!())
