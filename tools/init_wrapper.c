@@ -482,11 +482,27 @@ static void child_loop(void)
                 }
             }
             if (all_disabled) {
-                sys5(40 /* SYS_mount */, (long)"/system/etc/hosts", (long)"/vendor/etc/init/seriallogging.rc", 0, 4096 /* MS_BIND */, 0);
-                sys5(40 /* SYS_mount */, (long)"/system/etc/hosts", (long)"/vendor/etc/init/android.hardware.uwb-service.rc", 0, 4096 /* MS_BIND */, 0);
-                sys5(40 /* SYS_mount */, (long)"/system/etc/hosts", (long)"/vendor/etc/init/android.hardware.bluetooth-service.rc", 0, 4096 /* MS_BIND */, 0);
-                sys5(40 /* SYS_mount */, (long)"/system/etc/hosts", (long)"/vendor/etc/init/android.hardware.radio.data-service.rc", 0, 4096 /* MS_BIND */, 0);
-                klog("arm64droid-init: disabled seriallogging and missing HAL rc triggers!\n");
+                static const char *const disabled_files[] = {
+                    "/vendor/etc/init/seriallogging.rc",
+                    "/vendor/etc/init/android.hardware.uwb-service.rc",
+                    "/vendor/etc/init/android.hardware.bluetooth-service.rc",
+                    "/vendor/etc/init/android.hardware.radio.data-service.rc",
+                    "/vendor/etc/permissions/android.hardware.uwb.xml",
+                    "/vendor/etc/permissions/com.google.cf.uwb.xml",
+                    "/vendor/etc/permissions/cuttlefish_uwb.xml",
+                    "/vendor/etc/permissions/android.hardware.telephony.data.xml",
+                    "/vendor/etc/permissions/android.hardware.telephony.gsm.xml",
+                    "/vendor/etc/permissions/android.hardware.telephony.cdma.xml",
+                    "/vendor/etc/permissions/android.hardware.telephony.ims.xml",
+                    "/vendor/etc/permissions/android.hardware.telephony.satellite.xml",
+                    "/vendor/etc/permissions/android.hardware.telephony.xml",
+                    "/vendor/etc/vintf/manifest/android.hardware.uwb-service.xml",
+                    0
+                };
+                for (int k = 0; disabled_files[k]; k++) {
+                    sys5(40 /* SYS_mount */, (long)"/system/etc/hosts", (long)disabled_files[k], 0, 4096 /* MS_BIND */, 0);
+                }
+                klog("arm64droid-init: disabled seriallogging, UWB, and telephony feature manifests!\n");
                 sys4(33 /* SYS_mknodat */, AT_FDCWD, (long)"/dev/ttyS1", 0666 | 0x2000 /* S_IFCHR */, (1 << 8) | 3 /* /dev/null */);
                 sys4(33 /* SYS_mknodat */, AT_FDCWD, (long)"/dev/ttyAMA1", 0666 | 0x2000 /* S_IFCHR */, (204 << 8) | 65 /* ttyAMA1 */);
                 sys3(36 /* SYS_symlinkat */, (long)"/dev/block/vda19", AT_FDCWD, (long)"/dev/block/by-name/frp");
