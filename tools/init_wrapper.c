@@ -490,27 +490,12 @@ static void child_loop(void)
             }
         }
 
-        static int logcat_started = 0;
-        static char logcat_stack[65536] __attribute__((aligned(16)));
-        if (root_changed && !logcat_started && (now - t0) > 35000) {
-            if (sys4(79 /* SYS_newfstatat */, AT_FDCWD, (long)"/dev/socket/logdr", (long)st, 0) == 0) {
-                long lpid = sys5(SYS_clone, 17, (long)(logcat_stack + sizeof(logcat_stack)), 0, 0, 0);
-                if (lpid == 0) {
-                    static const char *const logcat_argv[] = { "/system/bin/logcat", "-b", "all", "-v", "time", "-f", "/dev/ttyAMA1", (const char *)0 };
-                    sys3(SYS_execve, (long)"/system/bin/logcat", (long)logcat_argv, 0);
-                    sys1(SYS_exit, 1);
-                }
-                logcat_started = 1;
-                klog("arm64droid-init: spawned background logcat to /dev/ttyAMA1!\n");
-            }
-        }
-
-        if (now - last_hb > 30000) {
+        if (now - last_hb > 60000) {
             last_hb = now;
             klog("arm64droid-init: watchdog heartbeat\n");
         }
 
-        struct timespec ts = { 0, root_changed ? 500000000 : 10000000 }; // 10ms until root entered, 500ms after
+        struct timespec ts = { root_changed ? 2 : 0, root_changed ? 0 : 20000000 }; // 20ms during boot, 2s after switch_root
         sys2(SYS_nanosleep, (long)&ts, 0);
     }
 }

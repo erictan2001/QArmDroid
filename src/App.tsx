@@ -89,12 +89,24 @@ export function App() {
     }
   };
 
+  const [optimized, setOptimized] = useState(false);
+
   // Auto-connect when VNC port becomes ready in embedded mode
   useEffect(() => {
     if (displayMode === "embedded" && status.vnc_ready && !connected && !connecting && !rfbRef.current) {
       connectVNC();
     }
   }, [status.vnc_ready, displayMode]);
+
+  // Auto-optimize animations and settings once ADB becomes available
+  useEffect(() => {
+    if (status.adb_ready && !optimized) {
+      invoke("optimize_performance").catch(() => {});
+      setOptimized(true);
+    } else if (!status.adb_ready) {
+      setOptimized(false);
+    }
+  }, [status.adb_ready, optimized]);
 
   const handleStart = async () => {
     setLogMsg(`Launching Android QEMU VM in ${displayMode} mode...`);

@@ -135,6 +135,16 @@ fn send_adb_text(text: String) -> Result<String, String> {
     }
 }
 
+#[tauri::command]
+fn optimize_performance() -> Result<String, String> {
+    // Disable window, transition, and animator scales in Android guest for instant UI responsiveness
+    let _ = Command::new("adb")
+        .args(&["-s", "127.0.0.1:5555", "shell", "settings put global window_animation_scale 0; settings put global transition_animation_scale 0; settings put global animator_duration_scale 0"])
+        .output();
+
+    Ok("UI animations optimized".to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -144,7 +154,8 @@ pub fn run() {
             stop_emulator,
             get_emulator_status,
             send_adb_key,
-            send_adb_text
+            send_adb_text,
+            optimize_performance
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

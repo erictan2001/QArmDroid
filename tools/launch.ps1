@@ -32,7 +32,7 @@
 [CmdletBinding()]
 param(
     [string]$DisplayMode = "sdl",
-    [string]$Memory = "6G",
+    [string]$Memory = "8G",
     [int]$Cores = 6,
     [string]$QemuPath = "C:\msys64\clangarm64\bin\qemu-system-aarch64.exe",
     [switch]$Headless
@@ -95,7 +95,7 @@ $QemuArgs = @(
     "-cpu", "host",
     "-machine", "virt,gic-version=3,highmem=on",
     "-m", $Memory,
-    "-smp", "$Cores",
+    "-smp", "$Cores,sockets=1,cores=$Cores,threads=1",
     "-kernel", $KernelPath,
     "-initrd", $InitrdPath,
     "-drive", "file=$DiskPath,format=raw,if=none,id=disk",
@@ -105,7 +105,6 @@ $QemuArgs = @(
     "-device", "virtio-gpu-pci,addr=03.0"
 ) + $InputArgs + $DisplayArgs + @(
     "-serial", "stdio",
-    "-serial", "file:$LogcatPath",
     "-monitor", "none",
     "-no-reboot",
     "-append", $AppendCmdline
