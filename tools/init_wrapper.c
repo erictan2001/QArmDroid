@@ -483,7 +483,10 @@ static void child_loop(void)
             }
             if (all_disabled) {
                 sys5(40 /* SYS_mount */, (long)"/system/etc/hosts", (long)"/vendor/etc/init/seriallogging.rc", 0, 4096 /* MS_BIND */, 0);
-                klog("arm64droid-init: disabled seriallogging.rc!\n");
+                sys5(40 /* SYS_mount */, (long)"/system/etc/hosts", (long)"/vendor/etc/init/android.hardware.uwb-service.rc", 0, 4096 /* MS_BIND */, 0);
+                sys5(40 /* SYS_mount */, (long)"/system/etc/hosts", (long)"/vendor/etc/init/android.hardware.bluetooth-service.rc", 0, 4096 /* MS_BIND */, 0);
+                sys5(40 /* SYS_mount */, (long)"/system/etc/hosts", (long)"/vendor/etc/init/android.hardware.radio.data-service.rc", 0, 4096 /* MS_BIND */, 0);
+                klog("arm64droid-init: disabled seriallogging and missing HAL rc triggers!\n");
                 sys4(33 /* SYS_mknodat */, AT_FDCWD, (long)"/dev/ttyS1", 0666 | 0x2000 /* S_IFCHR */, (1 << 8) | 3 /* /dev/null */);
                 sys4(33 /* SYS_mknodat */, AT_FDCWD, (long)"/dev/ttyAMA1", 0666 | 0x2000 /* S_IFCHR */, (204 << 8) | 65 /* ttyAMA1 */);
                 sys3(36 /* SYS_symlinkat */, (long)"/dev/block/vda19", AT_FDCWD, (long)"/dev/block/by-name/frp");

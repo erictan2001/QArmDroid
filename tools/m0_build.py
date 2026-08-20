@@ -341,6 +341,13 @@ def main():
             "# Disable cellular radio retry loop for non-telephony VM\n"
             "ro.radio.noril=yes\n"
             "ro.telephony.default_network=0\n"
+            "# ART / Dalvik JIT multi-threading on 6 vCPUs\n"
+            "dalvik.vm.dex2oat-threads=6\n"
+            "dalvik.vm.boot-dex2oat-threads=6\n"
+            "dalvik.vm.image-dex2oat-threads=6\n"
+            "dalvik.vm.heapgrowthlimit=256m\n"
+            "dalvik.vm.heapsize=512m\n"
+            "dalvik.vm.heaptargetutilization=0.75\n"
         ).encode()
         # init wrapper (boot #11 -> #12 fix): nothing in this image ever
         # brings eth0 up. CONFIG_IP_PNP=n in the kernel (no ip= param),
