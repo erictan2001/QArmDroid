@@ -18,6 +18,7 @@ export function App() {
     vnc_ready: false,
     adb_ready: false,
   });
+  const [displayMode, setDisplayMode] = useState<"embedded" | "sdl">("embedded");
   const [connecting, setConnecting] = useState(false);
   const [connected, setConnected] = useState(false);
   const [inputText, setInputText] = useState("");
@@ -42,7 +43,7 @@ export function App() {
     return () => clearInterval(timer);
   }, []);
 
-  // Connect to VNC WebSocket
+  // Connect to VNC WebSocket with zero-compression, ultra-low latency settings
   const connectVNC = () => {
     if (!screenRef.current) return;
     if (rfbRef.current) {
@@ -53,10 +54,14 @@ export function App() {
     }
 
     setConnecting(true);
-    setLogMsg("Connecting to display stream (ws://127.0.0.1:5901)...");
+    setLogMsg("Connecting to ultra-low latency display stream...");
 
     try {
       const rfb = new RFB(screenRef.current, "ws://127.0.0.1:5901");
+      
+      // Performance optimizations: disable compression overhead over localhost
+      rfb.qualityLevel = 9;       // Maximum quality, no lossy JPEG artifacts
+      rfb.compressionLevel = 0;   // 0 zlib compression (instant blit over localhost memory)
       rfb.scaleViewport = true;
       rfb.resizeSession = false;
       rfb.clipViewport = false;
@@ -66,7 +71,7 @@ export function App() {
       rfb.addEventListener("connect", () => {
         setConnecting(false);
         setConnected(true);
-        setLogMsg("Connected to Android display");
+        setLogMsg("Connected to Android display (Ultra-low latency mode)");
       });
 
       rfb.addEventListener("disconnect", (e: any) => {
@@ -84,22 +89,22 @@ export function App() {
     }
   };
 
-  // Auto-connect when VNC port becomes ready
+  // Auto-connect when VNC port becomes ready in embedded mode
   useEffect(() => {
-    if (status.vnc_ready && !connected && !connecting && !rfbRef.current) {
+    if (displayMode === "embedded" && status.vnc_ready && !connected && !connecting && !rfbRef.current) {
       connectVNC();
     }
-  }, [status.vnc_ready]);
+  }, [status.vnc_ready, displayMode]);
 
   const handleStart = async () => {
-    setLogMsg("Launching Android QEMU VM...");
+    setLogMsg(`Launching Android QEMU VM in ${displayMode} mode...`);
     try {
-      const msg = await invoke<string>("start_emulator");
+      const msg = await invoke<string>("start_emulator", { displayMode });
       setLogMsg(msg);
-      // Wait slightly then check status
+      // Poll for readiness
       setTimeout(async () => {
         const s = await checkStatus();
-        if (s.vnc_ready) connectVNC();
+        if (displayMode === "embedded" && s.vnc_ready) connectVNC();
       }, 1500);
     } catch (e) {
       setLogMsg(`Failed to launch: ${e}`);
@@ -136,7 +141,6 @@ export function App() {
     e.preventDefault();
     if (!inputText.trim()) return;
     try {
-      // Escape spaces for ADB input
       const escaped = inputText.replace(/ /g, "%s");
       await invoke("send_adb_text", { text: escaped });
       setInputText("");
@@ -154,7 +158,7 @@ export function App() {
           <h2>Android 16 ARM64</h2>
           <span
             className={`status-pill ${
-              connected
+              connected || (status.running && displayMode === "sdl")
                 ? "connected"
                 : status.running
                 ? "booting"
@@ -162,7 +166,9 @@ export function App() {
             }`}
           >
             {connected
-              ? "● Display Live"
+              ? "● Display Live (Embedded)"
+              : status.running && displayMode === "sdl"
+              ? "● Native SDL Window Active"
               : status.running
               ? "● Booting VM..."
               : "○ Stopped"}
@@ -170,6 +176,32 @@ export function App() {
         </div>
 
         <div className="header-controls">
+          {/* Mode Selector */}
+          {!status.running && (
+            <div className="mode-toggle">
+              <label className={`mode-label ${displayMode === "embedded" ? "active" : ""}`}>
+                <input
+                  type="radio"
+                  name="mode"
+                  value="embedded"
+                  checked={displayMode === "embedded"}
+                  onChange={() => setDisplayMode("embedded")}
+                />
+                Embedded
+              </label>
+              <label className={`mode-label ${displayMode === "sdl" ? "active" : ""}`}>
+                <input
+                  type="radio"
+                  name="mode"
+                  value="sdl"
+                  checked={displayMode === "sdl"}
+                  onChange={() => setDisplayMode("sdl")}
+                />
+                Native SDL
+              </label>
+            </div>
+          )}
+
           {!status.running ? (
             <button className="btn btn-primary" onClick={handleStart}>
               ▶ Launch Emulator
@@ -180,7 +212,7 @@ export function App() {
             </button>
           )}
 
-          {status.vnc_ready && !connected && (
+          {displayMode === "embedded" && status.vnc_ready && !connected && (
             <button className="btn btn-secondary" onClick={connectVNC}>
               🔄 Reconnect Screen
             </button>
@@ -194,10 +226,17 @@ export function App() {
           {/* RFB Canvas mount point */}
           <div ref={screenRef} className="vnc-canvas-container" />
 
-          {/* Placeholder overlay when not connected */}
-          {!connected && (
+          {/* Placeholder overlay when not connected or in SDL mode */}
+          {(!connected || displayMode === "sdl") && (
             <div className="screen-placeholder">
-              {connecting || (status.running && !status.vnc_ready) ? (
+              {status.running && displayMode === "sdl" ? (
+                <div className="placeholder-content">
+                  <span className="device-icon">⚡</span>
+                  <h3>Native GPU Window Running</h3>
+                  <p>Android is rendering directly in a native SDL DirectX/OpenGL window at full 60 FPS.</p>
+                  <p className="subtext">Use the toolbar on the right to send navigation and text input via ADB.</p>
+                </div>
+              ) : connecting || (status.running && !status.vnc_ready) ? (
                 <div className="placeholder-content">
                   <div className="spinner" />
                   <h3>Booting Android System...</h3>
@@ -208,7 +247,9 @@ export function App() {
                 <div className="placeholder-content">
                   <span className="device-icon">📱</span>
                   <h3>Emulator Ready</h3>
-                  <p>Click <strong>Launch Emulator</strong> to start Android 16</p>
+                  <p>
+                    Selected mode: <strong>{displayMode === "embedded" ? "In-App Embedded Display" : "Native SDL Window"}</strong>
+                  </p>
                   <button className="btn btn-primary btn-large" onClick={handleStart}>
                     ▶ Launch Android System
                   </button>
@@ -302,7 +343,7 @@ export function App() {
               <div>CPU / Accel: <strong>WHPX (Host)</strong></div>
               <div>GPU Engine: <strong>VirtIO SwiftShader</strong></div>
               <div>ADB Target: <strong>127.0.0.1:5555</strong></div>
-              <div>Display WS: <strong>ws://127.0.0.1:5901</strong></div>
+              <div>Display: <strong>{displayMode === "embedded" ? "ws://127.0.0.1:5901" : "Native SDL"}</strong></div>
             </div>
           </div>
         </aside>

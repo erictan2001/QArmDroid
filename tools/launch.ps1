@@ -80,7 +80,7 @@ $DisplayArgs = @()
 $InputArgs = @()
 
 if ($DisplayMode -eq "embedded" -or $DisplayMode -eq "vnc") {
-    $DisplayArgs = @("-vnc", "127.0.0.1:0,websocket=5901")
+    $DisplayArgs = @("-vnc", "127.0.0.1:0,websocket=5901,lossy=off,non-adaptive=on")
     $InputArgs   = @("-device", "virtio-tablet-pci", "-device", "virtio-keyboard-pci")
 } elseif ($DisplayMode -eq "sdl") {
     $DisplayArgs = @("-display", "sdl")

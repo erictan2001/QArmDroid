@@ -9,6 +9,8 @@ declare module "@novnc/novnc" {
     focusOnClick: boolean;
     background: string;
     viewOnly: boolean;
+    qualityLevel: number;
+    compressionLevel: number;
     sendKey(keysym: number, code: string, down?: boolean): void;
     sendCredentials(credentials: any): void;
     disconnect(): void;
