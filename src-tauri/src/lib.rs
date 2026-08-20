@@ -148,6 +148,30 @@ fn send_adb_text(text: String) -> Result<String, String> {
 }
 
 #[tauri::command]
+fn send_motion_down(x: u32, y: u32) -> Result<(), String> {
+    let _ = Command::new("adb")
+        .args(&["-s", "127.0.0.1:5555", "shell", "input", "motionevent", "DOWN", &x.to_string(), &y.to_string()])
+        .output();
+    Ok(())
+}
+
+#[tauri::command]
+fn send_motion_move(x: u32, y: u32) -> Result<(), String> {
+    let _ = Command::new("adb")
+        .args(&["-s", "127.0.0.1:5555", "shell", "input", "motionevent", "MOVE", &x.to_string(), &y.to_string()])
+        .output();
+    Ok(())
+}
+
+#[tauri::command]
+fn send_motion_up(x: u32, y: u32) -> Result<(), String> {
+    let _ = Command::new("adb")
+        .args(&["-s", "127.0.0.1:5555", "shell", "input", "motionevent", "UP", &x.to_string(), &y.to_string()])
+        .output();
+    Ok(())
+}
+
+#[tauri::command]
 fn send_touch_tap(x: u32, y: u32) -> Result<String, String> {
     let output = Command::new("adb")
         .args(&["-s", "127.0.0.1:5555", "shell", "input", "tap", &x.to_string(), &y.to_string()])
@@ -204,6 +228,9 @@ pub fn run() {
             send_adb_text,
             send_touch_tap,
             send_touch_swipe,
+            send_motion_down,
+            send_motion_move,
+            send_motion_up,
             optimize_performance
         ])
         .run(tauri::generate_context!())
