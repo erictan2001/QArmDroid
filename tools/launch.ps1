@@ -84,10 +84,10 @@ if ($DisplayMode -eq "embedded" -or $DisplayMode -eq "vnc") {
     $InputArgs   = @("-device", "virtio-tablet-pci", "-device", "virtio-keyboard-pci")
 } elseif ($DisplayMode -eq "sdl") {
     $DisplayArgs = @("-display", "sdl")
-    $InputArgs   = @("-device", "virtio-mouse-pci", "-device", "virtio-keyboard-pci")
+    $InputArgs   = @("-device", "virtio-tablet-pci", "-device", "virtio-keyboard-pci")
 } else {
     $DisplayArgs = @("-display", $DisplayMode)
-    $InputArgs   = @("-device", "virtio-mouse-pci", "-device", "virtio-keyboard-pci")
+    $InputArgs   = @("-device", "virtio-tablet-pci", "-device", "virtio-keyboard-pci")
 }
 
 $QemuArgs = @(
