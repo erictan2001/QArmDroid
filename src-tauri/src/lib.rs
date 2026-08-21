@@ -2,7 +2,9 @@ use std::io::Write;
 use std::net::{SocketAddr, TcpStream};
 use std::path::PathBuf;
 use std::process::Command;
-use std::sync::Mutex;
+use std::sync::mpsc::{channel, Sender};
+use std::sync::OnceLock;
+use std::thread;
 use std::time::Duration;
 use serde::Serialize;
 
@@ -13,31 +15,57 @@ struct EmulatorStatus {
     adb_ready: bool,
 }
 
-// Persistent TCP connection to the native touch daemon running inside the Android guest.
-// The daemon writes directly to /dev/input/event* (virtio-tablet), bypassing the entire
-// ADB shell -> Dalvik VM -> input command chain that costs ~90ms per gesture.
-static TOUCH_CONN: Mutex<Option<TcpStream>> = Mutex::new(None);
+// Asynchronous non-blocking background touch worker.
+// Guarantees that Tauri invoke threads and UI never block on network sockets or Mutexes.
+static TOUCH_SENDER: OnceLock<Sender<[u8; 14]>> = OnceLock::new();
 
-fn touch_send(packet: &[u8; 14]) -> Result<(), String> {
-    let mut guard = TOUCH_CONN.lock().map_err(|e| format!("Lock error: {}", e))?;
+fn get_touch_sender() -> &'static Sender<[u8; 14]> {
+    TOUCH_SENDER.get_or_init(|| {
+        let (tx, rx) = channel::<[u8; 14]>();
 
-    // Try to write on existing connection
-    if let Some(ref mut stream) = *guard {
-        if stream.write_all(packet).is_ok() {
-            return Ok(());
-        }
-        // Connection broken, drop and reconnect
-        *guard = None;
-    }
+        thread::spawn(move || {
+            let addr: SocketAddr = "127.0.0.1:6666".parse().unwrap();
+            let mut stream: Option<TcpStream> = None;
 
-    // Connect to native daemon TCP port 6666
-    let addr: SocketAddr = "127.0.0.1:6666".parse().unwrap();
-    let mut stream = TcpStream::connect_timeout(&addr, Duration::from_millis(200))
-        .map_err(|e| format!("Touch daemon connection error: {}", e))?;
-    stream.set_nodelay(true).ok();
-    stream.write_all(packet).map_err(|e| format!("Write error: {}", e))?;
-    *guard = Some(stream);
-    Ok(())
+            while let Ok(packet) = rx.recv() {
+                let mut sent = false;
+                if let Some(ref mut s) = stream {
+                    if s.write_all(&packet).is_ok() {
+                        sent = true;
+                    }
+                }
+
+                if !sent {
+                    stream = None;
+                    // Attempt quick connect
+                    if let Ok(mut s) = TcpStream::connect_timeout(&addr, Duration::from_millis(50)) {
+                        s.set_nodelay(true).ok();
+                        if s.write_all(&packet).is_ok() {
+                            stream = Some(s);
+                        }
+                    } else {
+                        // Ensure ADB port forward is active and retry once
+                        let _ = Command::new("adb")
+                            .args(&["-s", "127.0.0.1:5555", "forward", "tcp:6666", "tcp:6666"])
+                            .output();
+                        if let Ok(mut s) = TcpStream::connect_timeout(&addr, Duration::from_millis(80)) {
+                            s.set_nodelay(true).ok();
+                            if s.write_all(&packet).is_ok() {
+                                stream = Some(s);
+                            }
+                        }
+                    }
+                }
+            }
+        });
+
+        tx
+    })
+}
+
+fn touch_send_async(packet: [u8; 14]) -> Result<(), String> {
+    let sender = get_touch_sender();
+    sender.send(packet).map_err(|e| format!("Channel error: {}", e))
 }
 
 fn build_packet(cmd: u8, x1: u16, y1: u16, x2: u16, y2: u16, dur: u16) -> [u8; 14] {
@@ -131,11 +159,6 @@ fn start_emulator(display_mode: Option<String>) -> Result<String, String> {
 
 #[tauri::command]
 fn stop_emulator() -> Result<String, String> {
-    // Drop touch daemon connection
-    if let Ok(mut guard) = TOUCH_CONN.lock() {
-        *guard = None;
-    }
-
     // Kill QEMU process on Windows
     let _ = Command::new("taskkill")
         .args(&["/F", "/IM", "qemu-system-aarch64.exe"])
@@ -238,12 +261,12 @@ fn deploy_touch_daemon() -> Result<String, String> {
 
 // ---- Touch commands: try native daemon first, fallback to ADB ----
 
-// ---- Zero-latency native touch daemon commands (Pure TCP, No ADB overhead) ----
+// ---- Zero-latency non-blocking native touch commands (Pure TCP, No ADB overhead) ----
 
 #[tauri::command]
 fn send_touch_tap(x: u32, y: u32) -> Result<String, String> {
     let pkt = build_packet(1, x as u16, y as u16, 0, 0, 0);
-    touch_send(&pkt)?;
+    touch_send_async(pkt)?;
     Ok("Tap sent".to_string())
 }
 
@@ -251,26 +274,26 @@ fn send_touch_tap(x: u32, y: u32) -> Result<String, String> {
 fn send_touch_swipe(x1: u32, y1: u32, x2: u32, y2: u32, duration_ms: Option<u32>) -> Result<String, String> {
     let dur = duration_ms.unwrap_or(200) as u16;
     let pkt = build_packet(5, x1 as u16, y1 as u16, x2 as u16, y2 as u16, dur);
-    touch_send(&pkt)?;
+    touch_send_async(pkt)?;
     Ok("Swipe sent".to_string())
 }
 
 #[tauri::command]
 fn send_motion_down(x: u32, y: u32) -> Result<(), String> {
     let pkt = build_packet(2, x as u16, y as u16, 0, 0, 0);
-    touch_send(&pkt)
+    touch_send_async(pkt)
 }
 
 #[tauri::command]
 fn send_motion_move(x: u32, y: u32) -> Result<(), String> {
     let pkt = build_packet(3, x as u16, y as u16, 0, 0, 0);
-    touch_send(&pkt)
+    touch_send_async(pkt)
 }
 
 #[tauri::command]
 fn send_motion_up(_x: u32, _y: u32) -> Result<(), String> {
     let pkt = build_packet(4, 0, 0, 0, 0, 0);
-    touch_send(&pkt)
+    touch_send_async(pkt)
 }
 
 #[tauri::command]
