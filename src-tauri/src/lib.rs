@@ -197,7 +197,8 @@ fn is_port_open(port: u16, timeout_ms: u64) -> bool {
 fn get_emulator_status() -> EmulatorStatus {
     let vnc_ready = is_port_open(5901, 40);
     let adb_ready = is_port_open(5555, 40);
-    let running = vnc_ready || adb_ready;
+    let daemon_ready = is_port_open(6666, 40);
+    let running = vnc_ready || adb_ready || daemon_ready;
 
     EmulatorStatus {
         running,
