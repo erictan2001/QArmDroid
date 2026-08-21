@@ -30,20 +30,10 @@ fn touch_send(packet: &[u8; 14]) -> Result<(), String> {
         *guard = None;
     }
 
-    // (Re)connect to daemon via direct QEMU SLIRP or ADB port-forward
+    // Connect to native daemon TCP port 6666
     let addr: SocketAddr = "127.0.0.1:6666".parse().unwrap();
-    let stream_res = TcpStream::connect_timeout(&addr, Duration::from_millis(60));
-    let mut stream = match stream_res {
-        Ok(s) => s,
-        Err(_) => {
-            // Automatically ensure ADB forward is mapped
-            let _ = Command::new("adb")
-                .args(&["-s", "127.0.0.1:5555", "forward", "tcp:6666", "tcp:6666"])
-                .output();
-            TcpStream::connect_timeout(&addr, Duration::from_millis(60))
-                .map_err(|e| format!("Touch daemon not ready: {}", e))?
-        }
-    };
+    let mut stream = TcpStream::connect_timeout(&addr, Duration::from_millis(200))
+        .map_err(|e| format!("Touch daemon connection error: {}", e))?;
     stream.set_nodelay(true).ok();
     stream.write_all(packet).map_err(|e| format!("Write error: {}", e))?;
     *guard = Some(stream);
@@ -248,70 +238,39 @@ fn deploy_touch_daemon() -> Result<String, String> {
 
 // ---- Touch commands: try native daemon first, fallback to ADB ----
 
+// ---- Zero-latency native touch daemon commands (Pure TCP, No ADB overhead) ----
+
 #[tauri::command]
 fn send_touch_tap(x: u32, y: u32) -> Result<String, String> {
-    // Fast path: native daemon (<1ms)
     let pkt = build_packet(1, x as u16, y as u16, 0, 0, 0);
-    if touch_send(&pkt).is_ok() {
-        return Ok("Tap sent".to_string());
-    }
-    // Fallback: ADB (~90ms)
-    let _ = Command::new("adb")
-        .args(&["-s", "127.0.0.1:5555", "shell", "input", "tap", &x.to_string(), &y.to_string()])
-        .output();
-    Ok("Tap sent (adb)".to_string())
+    touch_send(&pkt)?;
+    Ok("Tap sent".to_string())
 }
 
 #[tauri::command]
 fn send_touch_swipe(x1: u32, y1: u32, x2: u32, y2: u32, duration_ms: Option<u32>) -> Result<String, String> {
-    let dur = duration_ms.unwrap_or(200);
-    // Fast path
-    let pkt = build_packet(5, x1 as u16, y1 as u16, x2 as u16, y2 as u16, dur as u16);
-    if touch_send(&pkt).is_ok() {
-        return Ok("Swipe sent".to_string());
-    }
-    // Fallback
-    let _ = Command::new("adb")
-        .args(&["-s", "127.0.0.1:5555", "shell", "input", "swipe",
-                &x1.to_string(), &y1.to_string(), &x2.to_string(), &y2.to_string(), &dur.to_string()])
-        .output();
-    Ok("Swipe sent (adb)".to_string())
+    let dur = duration_ms.unwrap_or(200) as u16;
+    let pkt = build_packet(5, x1 as u16, y1 as u16, x2 as u16, y2 as u16, dur);
+    touch_send(&pkt)?;
+    Ok("Swipe sent".to_string())
 }
 
 #[tauri::command]
 fn send_motion_down(x: u32, y: u32) -> Result<(), String> {
     let pkt = build_packet(2, x as u16, y as u16, 0, 0, 0);
-    if touch_send(&pkt).is_ok() {
-        return Ok(());
-    }
-    let _ = Command::new("adb")
-        .args(&["-s", "127.0.0.1:5555", "shell", "input", "motionevent", "DOWN", &x.to_string(), &y.to_string()])
-        .output();
-    Ok(())
+    touch_send(&pkt)
 }
 
 #[tauri::command]
 fn send_motion_move(x: u32, y: u32) -> Result<(), String> {
     let pkt = build_packet(3, x as u16, y as u16, 0, 0, 0);
-    if touch_send(&pkt).is_ok() {
-        return Ok(());
-    }
-    let _ = Command::new("adb")
-        .args(&["-s", "127.0.0.1:5555", "shell", "input", "motionevent", "MOVE", &x.to_string(), &y.to_string()])
-        .output();
-    Ok(())
+    touch_send(&pkt)
 }
 
 #[tauri::command]
 fn send_motion_up(_x: u32, _y: u32) -> Result<(), String> {
     let pkt = build_packet(4, 0, 0, 0, 0, 0);
-    if touch_send(&pkt).is_ok() {
-        return Ok(());
-    }
-    let _ = Command::new("adb")
-        .args(&["-s", "127.0.0.1:5555", "shell", "input", "motionevent", "UP", &_x.to_string(), &_y.to_string()])
-        .output();
-    Ok(())
+    touch_send(&pkt)
 }
 
 #[tauri::command]
