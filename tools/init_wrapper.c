@@ -519,22 +519,35 @@ static void child_loop(void)
                 /* Set up IDC files on existing /system/usr/idc directory */
                 sys5(40 /* SYS_mount */, (long)"tmpfs", (long)"/system/usr/idc", (long)"tmpfs", 0, 0);
 
-                const char idc_data[] = "touch.deviceType = touchScreen\ntouch.orientationAware = 1\n";
-                const char *idc_names[] = {
+                const char tablet_idc[] = "touch.deviceType = touchScreen\ntouch.orientationAware = 1\n";
+                const char mouse_idc[] = "touch.deviceType = pointer\n";
+
+                const char *tablet_names[] = {
                     "/system/usr/idc/QEMU_Virtio_Tablet.idc",
                     "/system/usr/idc/Vendor_0627_Product_0003.idc",
+                    0
+                };
+                for (int j = 0; tablet_names[j]; j++) {
+                    int idcfd = (int)sys4(SYS_openat, AT_FDCWD, (long)tablet_names[j], 65 /* O_WRONLY|O_CREAT|O_TRUNC */, 0644);
+                    if (idcfd >= 0) {
+                        sys3(SYS_write, idcfd, (long)tablet_idc, sizeof(tablet_idc) - 1);
+                        sys1(SYS_close, idcfd);
+                    }
+                }
+
+                const char *mouse_names[] = {
                     "/system/usr/idc/QEMU_Virtio_Mouse.idc",
                     "/system/usr/idc/Vendor_0627_Product_0001.idc",
                     0
                 };
-                for (int j = 0; idc_names[j]; j++) {
-                    int idcfd = (int)sys4(SYS_openat, AT_FDCWD, (long)idc_names[j], 65 /* O_WRONLY|O_CREAT|O_TRUNC */, 0644);
+                for (int j = 0; mouse_names[j]; j++) {
+                    int idcfd = (int)sys4(SYS_openat, AT_FDCWD, (long)mouse_names[j], 65 /* O_WRONLY|O_CREAT|O_TRUNC */, 0644);
                     if (idcfd >= 0) {
-                        sys3(SYS_write, idcfd, (long)idc_data, sizeof(idc_data) - 1);
+                        sys3(SYS_write, idcfd, (long)mouse_idc, sizeof(mouse_idc) - 1);
                         sys1(SYS_close, idcfd);
                     }
                 }
-                klog("arm64droid-init: mounted tmpfs on /system/usr/idc and created touchscreen IDC files!\n");
+                klog("arm64droid-init: configured IDC for Virtio Tablet (touchScreen) and Virtio Mouse (pointer)!\n");
             }
         }
 
