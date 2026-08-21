@@ -84,11 +84,6 @@ fn build_packet(cmd: u8, x1: u16, y1: u16, x2: u16, y2: u16, dur: u16) -> [u8; 1
     p
 }
 
-fn is_port_open(port: u16) -> bool {
-    let addr: SocketAddr = format!("127.0.0.1:{}", port).parse().unwrap();
-    TcpStream::connect_timeout(&addr, Duration::from_millis(250)).is_ok()
-}
-
 fn find_repo_root() -> Result<PathBuf, String> {
     // 1. Check CWD and walk upward
     if let Ok(cwd) = std::env::current_dir() {
@@ -127,7 +122,7 @@ fn find_repo_root() -> Result<PathBuf, String> {
 
 #[tauri::command]
 fn start_emulator(display_mode: Option<String>) -> Result<String, String> {
-    if is_port_open(5901) || is_port_open(5555) {
+    if is_port_open(5901, 50) || is_port_open(5555, 50) {
         return Ok("Emulator is already running.".to_string());
     }
 
@@ -167,22 +162,15 @@ fn stop_emulator() -> Result<String, String> {
     Ok("Emulator stopped.".to_string())
 }
 
-fn is_adb_ready() -> bool {
-    // Non-destructive check to avoid dropping active ADB TCP sockets
-    Command::new("adb")
-        .args(&["-s", "127.0.0.1:5555", "get-state"])
-        .output()
-        .map(|o| {
-            let out = String::from_utf8_lossy(&o.stdout);
-            out.contains("device")
-        })
-        .unwrap_or(false)
+fn is_port_open(port: u16, timeout_ms: u64) -> bool {
+    let addr: SocketAddr = format!("127.0.0.1:{}", port).parse().unwrap();
+    TcpStream::connect_timeout(&addr, Duration::from_millis(timeout_ms)).is_ok()
 }
 
 #[tauri::command]
 fn get_emulator_status() -> EmulatorStatus {
-    let vnc_ready = is_port_open(5901);
-    let adb_ready = is_adb_ready();
+    let vnc_ready = is_port_open(5901, 40);
+    let adb_ready = is_port_open(5555, 40);
     let running = vnc_ready || adb_ready;
 
     EmulatorStatus {
