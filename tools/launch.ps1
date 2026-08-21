@@ -74,6 +74,10 @@ if (-not (Test-Path $M0Dir)) {
 }
 "" | Out-File -FilePath $SerialLog -Encoding ascii -Force
 
+# Clean up any stale QEMU instances or port forwards to prevent hostfwd port collisions
+Get-Process -Name "qemu-system-aarch64" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+Start-Sleep -Milliseconds 300
+
 $AppendCmdline = "console=ttyAMA0 earlycon=pl011,0x9000000 printk.devkmsg=on audit=0 panic=-1 8250.nr_uarts=4 binder.impl=rust cma=0 firmware_class.path=/vendor/etc/ loop.max_part=7 init=/init bootconfig"
 
 $DisplayArgs = @()
