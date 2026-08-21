@@ -101,103 +101,68 @@ export function App() {
     isDown: boolean;
   } | null>(null);
 
-  // Capture-phase pointer listener attached directly to canvas mount point
-  useEffect(() => {
-    const container = screenRef.current;
-    if (!container) return;
+  const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    if (!rect.width || !rect.height) return;
+    const x = Math.max(0, Math.min(1280, Math.round(((e.clientX - rect.left) / rect.width) * 1280)));
+    const y = Math.max(0, Math.min(800, Math.round(((e.clientY - rect.top) / rect.height) * 800)));
 
-    const getCanvasCoords = (clientX: number, clientY: number) => {
-      const canvas = container.querySelector("canvas") || container;
-      const rect = canvas.getBoundingClientRect();
-      if (rect.width === 0 || rect.height === 0) return null;
-
-      const rawX = clientX - rect.left;
-      const rawY = clientY - rect.top;
-
-      const androidX = Math.round((rawX / rect.width) * 1280);
-      const androidY = Math.round((rawY / rect.height) * 800);
-
-      return {
-        x: Math.max(0, Math.min(1280, androidX)),
-        y: Math.max(0, Math.min(800, androidY)),
-      };
+    pointerState.current = {
+      startX: x,
+      startY: y,
+      currentX: x,
+      currentY: y,
+      startTime: Date.now(),
+      isDown: true,
     };
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId);
+    } catch {}
+  };
 
-    const handlePointerDownNative = (e: PointerEvent) => {
-      if (displayMode !== "embedded" || !connected) return;
-      const coords = getCanvasCoords(e.clientX, e.clientY);
-      if (!coords) return;
+  const handlePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!pointerState.current || !pointerState.current.isDown) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    if (!rect.width || !rect.height) return;
+    const x = Math.max(0, Math.min(1280, Math.round(((e.clientX - rect.left) / rect.width) * 1280)));
+    const y = Math.max(0, Math.min(800, Math.round(((e.clientY - rect.top) / rect.height) * 800)));
+    pointerState.current.currentX = x;
+    pointerState.current.currentY = y;
+  };
 
-      pointerState.current = {
-        startX: coords.x,
-        startY: coords.y,
-        currentX: coords.x,
-        currentY: coords.y,
-        startTime: Date.now(),
-        isDown: true,
-      };
+  const handlePointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!pointerState.current || !pointerState.current.isDown) return;
+    const start = pointerState.current;
+    pointerState.current = null;
 
-      try {
-        (e.target as HTMLElement)?.setPointerCapture?.(e.pointerId);
-      } catch {}
-    };
+    const rect = e.currentTarget.getBoundingClientRect();
+    const x = rect.width ? Math.max(0, Math.min(1280, Math.round(((e.clientX - rect.left) / rect.width) * 1280))) : start.currentX;
+    const y = rect.height ? Math.max(0, Math.min(800, Math.round(((e.clientY - rect.top) / rect.height) * 800))) : start.currentY;
 
-    const handlePointerMoveNative = (e: PointerEvent) => {
-      if (!pointerState.current || !pointerState.current.isDown) return;
-      const coords = getCanvasCoords(e.clientX, e.clientY);
-      if (!coords) return;
+    const dx = x - start.startX;
+    const dy = y - start.startY;
+    const dist = Math.hypot(dx, dy);
+    const duration = Date.now() - start.startTime;
 
-      pointerState.current.currentX = coords.x;
-      pointerState.current.currentY = coords.y;
-    };
-
-    const handlePointerUpNative = (e: PointerEvent) => {
-      if (!pointerState.current || !pointerState.current.isDown) return;
-      const start = pointerState.current;
-      pointerState.current = null;
-
-      const coords = getCanvasCoords(e.clientX, e.clientY);
-      const endX = coords ? coords.x : start.currentX;
-      const endY = coords ? coords.y : start.currentY;
-
-      const dx = endX - start.startX;
-      const dy = endY - start.startY;
-      const dist = Math.hypot(dx, dy);
-      const duration = Date.now() - start.startTime;
-
-      if (dist < 10) {
-        // Precise atomic tap
-        invoke("send_touch_tap", { x: endX, y: endY }).catch((err) => {
-          setLogMsg(`Tap error: ${err}`);
-        });
-      } else {
-        // Smooth interpolated swipe trajectory
-        const dur = Math.max(100, Math.min(600, duration));
-        invoke("send_touch_swipe", {
-          x1: start.startX,
-          y1: start.startY,
-          x2: endX,
-          y2: endY,
-          durationMs: dur,
-        }).catch((err) => {
-          setLogMsg(`Swipe error: ${err}`);
-        });
-      }
-    };
-
-    // Use capture phase so we intercept before any child stops propagation
-    container.addEventListener("pointerdown", handlePointerDownNative, { capture: true, passive: false });
-    window.addEventListener("pointermove", handlePointerMoveNative, { capture: true, passive: true });
-    window.addEventListener("pointerup", handlePointerUpNative, { capture: true, passive: false });
-    window.addEventListener("pointercancel", handlePointerUpNative, { capture: true, passive: false });
-
-    return () => {
-      container.removeEventListener("pointerdown", handlePointerDownNative, { capture: true });
-      window.removeEventListener("pointermove", handlePointerMoveNative, { capture: true });
-      window.removeEventListener("pointerup", handlePointerUpNative, { capture: true });
-      window.removeEventListener("pointercancel", handlePointerUpNative, { capture: true });
-    };
-  }, [connected, displayMode]);
+    if (dist < 10) {
+      // Instant atomic tap
+      invoke("send_touch_tap", { x, y }).catch((err) => {
+        setLogMsg(`Tap error: ${err}`);
+      });
+    } else {
+      // Smooth swipe trajectory
+      const dur = Math.max(100, Math.min(600, duration));
+      invoke("send_touch_swipe", {
+        x1: start.startX,
+        y1: start.startY,
+        x2: x,
+        y2: y,
+        durationMs: dur,
+      }).catch((err) => {
+        setLogMsg(`Swipe error: ${err}`);
+      });
+    }
+  };
 
   // Auto-connect when VNC port becomes ready in embedded mode
   useEffect(() => {
@@ -372,6 +337,17 @@ export function App() {
         <div className={`screen-wrapper ${colorFix ? "color-fix-active" : ""}`}>
           {/* RFB Canvas mount point */}
           <div ref={screenRef} className="vnc-canvas-container" />
+
+          {/* Direct Hardware Touch Interaction Surface (0% noVNC interference) */}
+          {connected && displayMode === "embedded" && (
+            <div
+              className="touch-interaction-surface"
+              onPointerDown={handlePointerDown}
+              onPointerMove={handlePointerMove}
+              onPointerUp={handlePointerUp}
+              onPointerCancel={handlePointerUp}
+            />
+          )}
 
           {/* Placeholder overlay when not connected or in SDL mode */}
           {(!connected || displayMode === "sdl") && (
