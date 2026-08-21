@@ -108,7 +108,8 @@ $QemuArgs = @(
     "-device", "virtio-net-pci,netdev=net0,addr=02.0",
     "-device", "virtio-gpu-pci,addr=03.0"
 ) + $InputArgs + $DisplayArgs + @(
-    "-serial", "stdio",
+    "-chardev", "file,id=char0,path=$SerialLog",
+    "-serial", "chardev:char0",
     "-monitor", "none",
     "-no-reboot",
     "-append", $AppendCmdline
