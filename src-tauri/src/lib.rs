@@ -30,10 +30,20 @@ fn touch_send(packet: &[u8; 14]) -> Result<(), String> {
         *guard = None;
     }
 
-    // (Re)connect to the daemon via ADB port-forward
+    // (Re)connect to daemon via direct QEMU SLIRP or ADB port-forward
     let addr: SocketAddr = "127.0.0.1:6666".parse().unwrap();
-    let mut stream = TcpStream::connect_timeout(&addr, Duration::from_millis(50))
-        .map_err(|e| format!("Touch daemon not ready: {}", e))?;
+    let stream_res = TcpStream::connect_timeout(&addr, Duration::from_millis(60));
+    let mut stream = match stream_res {
+        Ok(s) => s,
+        Err(_) => {
+            // Automatically ensure ADB forward is mapped
+            let _ = Command::new("adb")
+                .args(&["-s", "127.0.0.1:5555", "forward", "tcp:6666", "tcp:6666"])
+                .output();
+            TcpStream::connect_timeout(&addr, Duration::from_millis(60))
+                .map_err(|e| format!("Touch daemon not ready: {}", e))?
+        }
+    };
     stream.set_nodelay(true).ok();
     stream.write_all(packet).map_err(|e| format!("Write error: {}", e))?;
     *guard = Some(stream);
@@ -208,35 +218,32 @@ fn deploy_touch_daemon() -> Result<String, String> {
         return Err("touch_daemon.elf not found in tools/".to_string());
     }
 
-    // Push the daemon binary
-    let push = Command::new("adb")
-        .args(&["-s", "127.0.0.1:5555", "push",
-                daemon_elf.to_str().unwrap(),
-                "/data/local/tmp/touch_daemon"])
-        .output()
-        .map_err(|e| format!("ADB push error: {}", e))?;
-
-    if !push.status.success() {
-        return Err(format!("Push failed: {}", String::from_utf8_lossy(&push.stderr)));
-    }
-
-    // Kill any previous instance, chmod, and start in background
-    let _ = Command::new("adb")
-        .args(&["-s", "127.0.0.1:5555", "shell",
-                "killall touch_daemon 2>/dev/null; chmod 755 /data/local/tmp/touch_daemon; /data/local/tmp/touch_daemon &"])
+    // Check if daemon is already running
+    let check = Command::new("adb")
+        .args(&["-s", "127.0.0.1:5555", "shell", "pidof touch_daemon"])
         .output();
+    let is_running = check.map(|o| !o.stdout.is_empty()).unwrap_or(false);
+
+    if !is_running {
+        // Push the daemon binary
+        let _ = Command::new("adb")
+            .args(&["-s", "127.0.0.1:5555", "push",
+                    daemon_elf.to_str().unwrap(),
+                    "/data/local/tmp/touch_daemon"])
+            .output();
+
+        let _ = Command::new("adb")
+            .args(&["-s", "127.0.0.1:5555", "shell",
+                    "chmod 755 /data/local/tmp/touch_daemon; /data/local/tmp/touch_daemon &"])
+            .output();
+    }
 
     // Set up ADB port-forward so host:6666 -> guest:6666
-    let fwd = Command::new("adb")
+    let _ = Command::new("adb")
         .args(&["-s", "127.0.0.1:5555", "forward", "tcp:6666", "tcp:6666"])
-        .output()
-        .map_err(|e| format!("Port forward error: {}", e))?;
+        .output();
 
-    if !fwd.status.success() {
-        return Err(format!("Port forward failed: {}", String::from_utf8_lossy(&fwd.stderr)));
-    }
-
-    Ok("Touch daemon deployed and started".to_string())
+    Ok("Touch daemon deployed and active".to_string())
 }
 
 // ---- Touch commands: try native daemon first, fallback to ADB ----

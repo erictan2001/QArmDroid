@@ -100,7 +100,7 @@ $QemuArgs = @(
     "-initrd", $InitrdPath,
     "-drive", "file=$DiskPath,format=raw,if=none,id=disk",
     "-device", "virtio-blk-pci,drive=disk,addr=01.0",
-    "-netdev", "user,id=net0,hostfwd=tcp:127.0.0.1:5555-10.0.2.15:5555,hostfwd=udp:127.0.0.1:6666-10.0.2.15:6666",
+    "-netdev", "user,id=net0,hostfwd=tcp:127.0.0.1:5555-10.0.2.15:5555,hostfwd=tcp:127.0.0.1:6666-10.0.2.15:6666",
     "-device", "virtio-net-pci,netdev=net0,addr=02.0",
     "-device", "virtio-gpu-pci,addr=03.0"
 ) + $InputArgs + $DisplayArgs + @(
