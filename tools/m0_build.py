@@ -79,7 +79,6 @@ def build_bootconfig() -> bytes:
         "androidboot.hardware.vulkan=pastel",
         "androidboot.hardware.hwcomposer=drm_hwcomposer",
         "androidboot.hardware.hwcomposer.display_finder_mode=drm",
-        "androidboot.hardware.hwcomposer.display_framebuffer_format=bgra",
         # other ro.boot.* props init_graphics.vendor.rc / system rc expand:
         # CF_DEFAULTS_DISPLAY_DPI=320, CF_DEFAULTS_SETUPWIZARD_MODE=DISABLED,
         # hw_timeout_multiplier=3 (native arch), hypervisor.vm.supported=0 (arm64).
@@ -338,12 +337,6 @@ def main():
             "persist.sys.ui.hw=1\n"
             "ro.config.avoid_gfx_accel=0\n"
             "ro.hwui.render_dirty_regions=false\n"
-            "# Color format & composition properties for virtio-gpu\n"
-            "ro.surface_flinger.default_composition_pixel_format=5\n"
-            "ro.surface_flinger.use_color_management=0\n"
-            "ro.surface_flinger.has_wide_color_display=0\n"
-            "ro.surface_flinger.has_HDR_display=0\n"
-            "persist.sys.sf.color_mode=0\n"
             "# Disable cellular radio retry loop for non-telephony VM\n"
             "ro.radio.noril=yes\n"
             "ro.telephony.default_network=0\n"

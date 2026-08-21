@@ -66,8 +66,8 @@ export function App() {
       rfb.scaleViewport = true;
       rfb.resizeSession = false;
       rfb.clipViewport = false;
-      rfb.focusOnClick = false;
-      rfb.viewOnly = true;        // Direct input is handled natively via ADB for 100% precision
+      rfb.focusOnClick = true;
+      rfb.viewOnly = false;       // Direct RFB hardware touch/pointer stream enabled
       rfb.background = "#0f172a";
 
       rfb.addEventListener("connect", () => {

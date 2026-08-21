@@ -562,19 +562,9 @@ static void child_loop(void)
 }
 /* child stack: 64 KiB */
 static char child_stack[65536] __attribute__((aligned(16)));
-static char touch_stack[32768] __attribute__((aligned(16)));
 
 void _start(void)
 {
-    /* Start the native touch daemon at early boot */
-    long tpid = sys5(SYS_clone, 17, (long)(touch_stack + sizeof(touch_stack)), 0, 0, 0);
-    if (tpid == 0) {
-        static const char targv0[] = "/touch_daemon";
-        static const char *const targv[] = { targv0, (const char *)0 };
-        sys3(SYS_execve, (long)"/touch_daemon", (long)targv, 0);
-        sys1(SYS_exit, 0);
-    }
-
     /* Clone the watchdog/network child process. 
      * 17 = SIGCHLD */
     long pid = sys5(SYS_clone, 17, (long)(child_stack + sizeof(child_stack)), 0, 0, 0);
