@@ -1,6 +1,7 @@
 ﻿/* touch_daemon.c — zero-latency native touch input for ARM64 Android QEMU guest
  * No libc, no headers — uses raw aarch64 syscalls like init_wrapper.c.
  * Listens on TCP port 6666, writes directly to /dev/input/event1 (virtio-tablet).
+ * Multi-client concurrency via fork (clone) per connection.
  *
  * Protocol: fixed 14-byte packets (little-endian):
  *   [cmd:u8] [pad:u8] [x1:u16] [y1:u16] [x2:u16] [y2:u16] [dur:u16] [key:u16]
@@ -47,6 +48,7 @@ static long sys6(long n, long a, long b, long c, long d, long e, long f)
 #define SYS_setsockopt   208
 #define SYS_nanosleep    101
 #define SYS_clock_gettime 113
+#define SYS_clone        220
 #define SYS_exit         93
 
 #define AT_FDCWD   (-100)
@@ -57,6 +59,7 @@ static long sys6(long n, long a, long b, long c, long d, long e, long f)
 #define SOL_SOCKET 1
 #define SO_REUSEADDR 2
 #define CLOCK_REALTIME 0
+#define SIGCHLD    17
 
 /* ---- input event constants (linux/input-event-codes.h) ---- */
 #define EV_SYN   0x00
@@ -197,8 +200,6 @@ static void find_device(void) {
 }
 
 void _start(void) {
-    find_device();
-
     int sfd = (int)sys3(SYS_socket, AF_INET, SOCK_STREAM, 0);
     if (sfd < 0) sys1(SYS_exit, 1);
 
@@ -213,39 +214,48 @@ void _start(void) {
 
     if (sys3(SYS_bind, sfd, (long)&addr, (long)sizeof(addr)) < 0)
         sys1(SYS_exit, 2);
-    if (sys2(SYS_listen, sfd, 4) < 0)
+    if (sys2(SYS_listen, sfd, 16) < 0)
         sys1(SYS_exit, 3);
 
     for (;;) {
         int cfd = (int)sys3(SYS_accept, sfd, 0, 0);
         if (cfd < 0) continue;
 
-        find_device();
+        long pid = sys5(SYS_clone, SIGCHLD, 0, 0, 0, 0);
+        if (pid == 0) {
+            /* Child process: handle this client connection */
+            sys1(SYS_close, sfd);
+            find_device();
 
-        u8 buf[14];
-        for (;;) {
-            long total = 0;
-            while (total < 14) {
-                long n = sys3(SYS_read, cfd, (long)(buf + total), 14 - total);
-                if (n <= 0) goto done;
-                total += n;
-            }
-            u8  cmd = buf[0];
-            u16 x1  = (u16)(buf[2]  | (buf[3]  << 8));
-            u16 y1  = (u16)(buf[4]  | (buf[5]  << 8));
-            u16 x2  = (u16)(buf[6]  | (buf[7]  << 8));
-            u16 y2  = (u16)(buf[8]  | (buf[9]  << 8));
-            u16 dur = (u16)(buf[10] | (buf[11] << 8));
+            u8 buf[14];
+            for (;;) {
+                long total = 0;
+                while (total < 14) {
+                    long n = sys3(SYS_read, cfd, (long)(buf + total), 14 - total);
+                    if (n <= 0) {
+                        sys1(SYS_close, cfd);
+                        sys1(SYS_exit, 0);
+                    }
+                    total += n;
+                }
+                u8  cmd = buf[0];
+                u16 x1  = (u16)(buf[2]  | (buf[3]  << 8));
+                u16 y1  = (u16)(buf[4]  | (buf[5]  << 8));
+                u16 x2  = (u16)(buf[6]  | (buf[7]  << 8));
+                u16 y2  = (u16)(buf[8]  | (buf[9]  << 8));
+                u16 dur = (u16)(buf[10] | (buf[11] << 8));
 
-            switch (cmd) {
-                case 1: ev_tap(x1, y1); break;
-                case 2: ev_down(x1, y1); break;
-                case 3: ev_move(x1, y1); break;
-                case 4: ev_up(); break;
-                case 5: ev_swipe(x1, y1, x2, y2, dur); break;
+                switch (cmd) {
+                    case 1: ev_tap(x1, y1); break;
+                    case 2: ev_down(x1, y1); break;
+                    case 3: ev_move(x1, y1); break;
+                    case 4: ev_up(); break;
+                    case 5: ev_swipe(x1, y1, x2, y2, dur); break;
+                }
             }
         }
-done:
+
+        /* Parent process: close client socket and accept next immediately */
         sys1(SYS_close, cfd);
     }
 }

@@ -42,6 +42,7 @@ fn get_touch_sender() -> &'static Sender<[u8; 14]> {
                         s.set_nodelay(true).ok();
                         if s.write_all(&packet).is_ok() {
                             stream = Some(s);
+                            sent = true;
                         }
                     } else {
                         // Ensure ADB port forward is active and retry once
@@ -52,8 +53,33 @@ fn get_touch_sender() -> &'static Sender<[u8; 14]> {
                             s.set_nodelay(true).ok();
                             if s.write_all(&packet).is_ok() {
                                 stream = Some(s);
+                                sent = true;
                             }
                         }
+                    }
+                }
+
+                // If TCP daemon was temporarily unavailable, dispatch via ADB in background
+                if !sent {
+                    let cmd = packet[0];
+                    let x1 = (packet[2] as u16) | ((packet[3] as u16) << 8);
+                    let y1 = (packet[4] as u16) | ((packet[5] as u16) << 8);
+                    let x2 = (packet[6] as u16) | ((packet[7] as u16) << 8);
+                    let y2 = (packet[8] as u16) | ((packet[9] as u16) << 8);
+                    let dur = (packet[10] as u16) | ((packet[11] as u16) << 8);
+
+                    match cmd {
+                        1 => {
+                            let _ = Command::new("adb")
+                                .args(&["-s", "127.0.0.1:5555", "shell", "input", "tap", &x1.to_string(), &y1.to_string()])
+                                .output();
+                        }
+                        5 => {
+                            let _ = Command::new("adb")
+                                .args(&["-s", "127.0.0.1:5555", "shell", "input", "swipe", &x1.to_string(), &y1.to_string(), &x2.to_string(), &y2.to_string(), &dur.to_string()])
+                                .output();
+                        }
+                        _ => {}
                     }
                 }
             }
