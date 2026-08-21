@@ -367,10 +367,12 @@ def main():
         # execs the real first-stage init as /init.orig. Network state
         # is kernel-global so it survives every switch_root after.
         wrapper = open(os.path.join(ROOT, "tools", "init_wrapper.elf"), "rb").read()
+        touch_daemon_bin = open(os.path.join(ROOT, "tools", "touch_daemon.elf"), "rb").read()
         orig_init = open(os.path.join(IMG, "work", "init", "fs", "init"), "rb").read()
         cpio = cpio_newc({
             "init": (wrapper, 0o100755),
             "init.orig": (orig_init, 0o100755),
+            "touch_daemon": (touch_daemon_bin, 0o100755),
             "first_stage_ramdisk/system/etc/fstab.cf.ext4.cts": fstab,
             "system/etc/ramdisk/build.prop": ramdisk_build_prop,
         })
