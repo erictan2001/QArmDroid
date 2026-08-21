@@ -519,7 +519,7 @@ static void child_loop(void)
                 /* Set up IDC files on existing /system/usr/idc directory */
                 sys5(40 /* SYS_mount */, (long)"tmpfs", (long)"/system/usr/idc", (long)"tmpfs", 0, 0);
 
-                const char tablet_idc[] = "touch.deviceType = touchScreen\ntouch.orientationAware = 1\n";
+                const char tablet_idc[] = "touch.deviceType = pointer\n";
                 const char mouse_idc[] = "touch.deviceType = pointer\n";
 
                 const char *tablet_names[] = {
