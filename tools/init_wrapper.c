@@ -519,7 +519,7 @@ static void child_loop(void)
                 /* Set up IDC files on existing /system/usr/idc directory */
                 sys5(40 /* SYS_mount */, (long)"tmpfs", (long)"/system/usr/idc", (long)"tmpfs", 0, 0);
 
-                const char tablet_idc[] = "touch.deviceType = pointer\n";
+                const char tablet_idc[] = "touch.deviceType = touchScreen\ntouch.orientationAware = 1\ntouch.gestureMode = default\n";
                 const char mouse_idc[] = "touch.deviceType = pointer\n";
 
                 const char *tablet_names[] = {
@@ -535,6 +535,21 @@ static void child_loop(void)
                     }
                 }
 
+                /* Set up Keylayout mapping for Virtio Tablet (map BTN_LEFT 272 -> BTN_TOUCH) */
+                const char kl_data[] = "key 272   BTN_TOUCH\nkey 273   BACK\n";
+                const char *kl_names[] = {
+                    "/system/usr/keylayout/QEMU_Virtio_Tablet.kl",
+                    "/system/usr/keylayout/Vendor_0627_Product_0003.kl",
+                    0
+                };
+                for (int j = 0; kl_names[j]; j++) {
+                    int klfd = (int)sys4(SYS_openat, AT_FDCWD, (long)kl_names[j], 65 /* O_WRONLY|O_CREAT|O_TRUNC */, 0644);
+                    if (klfd >= 0) {
+                        sys3(SYS_write, klfd, (long)kl_data, sizeof(kl_data) - 1);
+                        sys1(SYS_close, klfd);
+                    }
+                }
+
                 const char *mouse_names[] = {
                     "/system/usr/idc/QEMU_Virtio_Mouse.idc",
                     "/system/usr/idc/Vendor_0627_Product_0001.idc",
@@ -547,7 +562,7 @@ static void child_loop(void)
                         sys1(SYS_close, idcfd);
                     }
                 }
-                klog("arm64droid-init: configured IDC for Virtio Tablet (touchScreen) and Virtio Mouse (pointer)!\n");
+                klog("arm64droid-init: configured IDC and KL for Virtio Tablet (touchScreen)!\n");
             }
         }
 
