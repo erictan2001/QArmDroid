@@ -92,77 +92,7 @@ export function App() {
   };
 
   const [optimized, setOptimized] = useState(false);
-  const pointerState = useRef<{
-    startX: number;
-    startY: number;
-    currentX: number;
-    currentY: number;
-    startTime: number;
-    isDown: boolean;
-  } | null>(null);
 
-  const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
-    const rect = e.currentTarget.getBoundingClientRect();
-    if (!rect.width || !rect.height) return;
-    const x = Math.max(0, Math.min(1280, Math.round(((e.clientX - rect.left) / rect.width) * 1280)));
-    const y = Math.max(0, Math.min(800, Math.round(((e.clientY - rect.top) / rect.height) * 800)));
-
-    pointerState.current = {
-      startX: x,
-      startY: y,
-      currentX: x,
-      currentY: y,
-      startTime: Date.now(),
-      isDown: true,
-    };
-    try {
-      e.currentTarget.setPointerCapture(e.pointerId);
-    } catch {}
-  };
-
-  const handlePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
-    if (!pointerState.current || !pointerState.current.isDown) return;
-    const rect = e.currentTarget.getBoundingClientRect();
-    if (!rect.width || !rect.height) return;
-    const x = Math.max(0, Math.min(1280, Math.round(((e.clientX - rect.left) / rect.width) * 1280)));
-    const y = Math.max(0, Math.min(800, Math.round(((e.clientY - rect.top) / rect.height) * 800)));
-    pointerState.current.currentX = x;
-    pointerState.current.currentY = y;
-  };
-
-  const handlePointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
-    if (!pointerState.current || !pointerState.current.isDown) return;
-    const start = pointerState.current;
-    pointerState.current = null;
-
-    const rect = e.currentTarget.getBoundingClientRect();
-    const x = rect.width ? Math.max(0, Math.min(1280, Math.round(((e.clientX - rect.left) / rect.width) * 1280))) : start.currentX;
-    const y = rect.height ? Math.max(0, Math.min(800, Math.round(((e.clientY - rect.top) / rect.height) * 800))) : start.currentY;
-
-    const dx = x - start.startX;
-    const dy = y - start.startY;
-    const dist = Math.hypot(dx, dy);
-    const duration = Date.now() - start.startTime;
-
-    if (dist < 10) {
-      // Instant atomic tap
-      invoke("send_touch_tap", { x, y }).catch((err) => {
-        setLogMsg(`Tap error: ${err}`);
-      });
-    } else {
-      // Smooth swipe trajectory
-      const dur = Math.max(100, Math.min(600, duration));
-      invoke("send_touch_swipe", {
-        x1: start.startX,
-        y1: start.startY,
-        x2: x,
-        y2: y,
-        durationMs: dur,
-      }).catch((err) => {
-        setLogMsg(`Swipe error: ${err}`);
-      });
-    }
-  };
 
   // Auto-connect when VNC port becomes ready in embedded mode
   useEffect(() => {
@@ -335,19 +265,8 @@ export function App() {
       {/* Main Workspace: Screen Viewport + Android Control Bar */}
       <main className="main-viewport">
         <div className={`screen-wrapper ${colorFix ? "color-fix-active" : ""}`}>
-          {/* RFB Canvas mount point */}
+          {/* RFB Canvas mount point (direct hardware touch via RFB protocol) */}
           <div ref={screenRef} className="vnc-canvas-container" />
-
-          {/* Direct Hardware Touch Interaction Surface (0% noVNC interference) */}
-          {connected && displayMode === "embedded" && (
-            <div
-              className="touch-interaction-surface"
-              onPointerDown={handlePointerDown}
-              onPointerMove={handlePointerMove}
-              onPointerUp={handlePointerUp}
-              onPointerCancel={handlePointerUp}
-            />
-          )}
 
           {/* Placeholder overlay when not connected or in SDL mode */}
           {(!connected || displayMode === "sdl") && (

@@ -203,7 +203,7 @@ body, html, #root {
   display: flex;
   align-items: center;
   justify-content: center;
-  pointer-events: none; /* Disable noVNC event interception */
+  cursor: default;
 }
 
 .vnc-canvas-container canvas {
@@ -216,20 +216,6 @@ body, html, #root {
   image-rendering: -webkit-optimize-contrast;
   image-rendering: crisp-edges;
   transition: filter 0.15s ease;
-  pointer-events: none;
-}
-
-/* Direct transparent touch overlay receiving 100% of user clicks/swipes */
-.touch-interaction-surface {
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
-  z-index: 5;
-  touch-action: none;
-  cursor: crosshair;
-  background: transparent;
 }
 
 /* Zero-cost GPU hardware color matrix (swaps BGR to RGB) */
