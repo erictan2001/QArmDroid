@@ -18,11 +18,12 @@ export function App() {
     vnc_ready: false,
     adb_ready: false,
   });
-  const [displayMode, setDisplayMode] = useState<"embedded" | "sdl">("embedded");
-  const [connecting, setConnecting] = useState(false);
-  const [connected, setConnected] = useState(false);
+  const [displayMode, setDisplayMode] = useState<string>("embedded");
+  const [connecting, setConnecting] = useState<boolean>(false);
+  const [connected, setConnected] = useState<boolean>(false);
+  const [logMsg, setLogMsg] = useState<string>("System idle. Click 'Launch Emulator' to start.");
+  const [colorFix, setColorFix] = useState<boolean>(true); // BGR -> RGB color correction active by default
   const [inputText, setInputText] = useState("");
-  const [logMsg, setLogMsg] = useState("Ready to launch");
 
   // Check emulator status periodically
   const checkStatus = async () => {
@@ -340,12 +341,35 @@ export function App() {
               🔄 Reconnect Screen
             </button>
           )}
+
+          {displayMode === "embedded" && (
+            <button
+              className={`btn btn-secondary ${colorFix ? "btn-active" : ""}`}
+              onClick={() => setColorFix((prev) => !prev)}
+              title="Toggle BGR to RGB Color Correction (swaps Red and Blue channels)"
+            >
+              🎨 Color Fix: {colorFix ? "ON" : "OFF"}
+            </button>
+          )}
         </div>
       </header>
 
+      {/* Hardware-accelerated SVG color-matrix filter (swaps BGR to RGB on GPU) */}
+      <svg style={{ position: "absolute", width: 0, height: 0, pointerEvents: "none" }} aria-hidden="true">
+        <filter id="bgr-to-rgb" colorInterpolationFilters="sRGB">
+          <feColorMatrix
+            type="matrix"
+            values="0 0 1 0 0
+                    0 1 0 0 0
+                    1 0 0 0 0
+                    0 0 0 1 0"
+          />
+        </filter>
+      </svg>
+
       {/* Main Workspace: Screen Viewport + Android Control Bar */}
       <main className="main-viewport">
-        <div className="screen-wrapper">
+        <div className={`screen-wrapper ${colorFix ? "color-fix-active" : ""}`}>
           {/* RFB Canvas mount point */}
           <div ref={screenRef} className="vnc-canvas-container" />
 

@@ -214,6 +214,12 @@ body, html, #root {
   touch-action: none;
   image-rendering: -webkit-optimize-contrast;
   image-rendering: crisp-edges;
+  transition: filter 0.15s ease;
+}
+
+/* Zero-cost GPU hardware color matrix (swaps BGR to RGB) */
+.color-fix-active .vnc-canvas-container canvas {
+  filter: url(#bgr-to-rgb);
 }
 
 /* Screen Placeholder Overlay */
