@@ -147,13 +147,13 @@ struct pollfd {
 };
 
 /* ---------- helpers ---------- */
-static void *memset(void *s, int c, unsigned long n)
+void *memset(void *s, int c, unsigned long n)
 {
     unsigned char *p = s;
     while (n--) *p++ = (unsigned char)c;
     return s;
 }
-static void *memcpy(void *d, const void *s, unsigned long n)
+void *memcpy(void *d, const void *s, unsigned long n)
 {
     unsigned char *dp = d;
     const unsigned char *sp = s;
@@ -413,6 +413,20 @@ static int path_alive(void)
     return alive;
 }
 
+static void stub_crashing_services(void)
+{
+    static int stubbed = 0;
+    if (stubbed) return;
+
+    long r = sys5(SYS_mount, (long)"/stub_daemon", (long)"/vendor/bin/hw/android.hardware.uwb-service", 0, 4096 /* MS_BIND */, 0);
+    if (r == 0) {
+        sys5(SYS_mount, (long)"/stub_daemon", (long)"/vendor/bin/hw/android.hardware.nfc-service", 0, 4096 /* MS_BIND */, 0);
+        sys5(SYS_mount, (long)"/stub_daemon", (long)"/vendor/etc/init/seriallogging.rc", 0, 4096 /* MS_BIND */, 0);
+        klog("arm64droid-init: stubbed crashing vendor HAL services and seriallogging with /stub_daemon\n");
+        stubbed = 1;
+    }
+}
+
 static void child_loop(void)
 {
     if (kfd < 0)
@@ -423,163 +437,112 @@ static void child_loop(void)
     long t0 = mono_ms();
     if (t0 < 0) t0 = 0;
 
-    int root_changed = 0;
-    long st[16];
-    const char *disabled_apex = "/vendor/apex/com.google.cf.disabled.apex";
-    const char *bad_apexes[] = {
-        "/vendor/apex/com.google.cf.light.apex",
-        "/vendor/apex/com.google.cf.oemlock.apex",
-        "/vendor/apex/com.google.cf.bt.apex",
-        "/vendor/apex/com.google.cf.nfc.apex",
-        "/vendor/apex/com.android.hardware.threadnetwork.apex",
-        "/vendor/apex/com.android.hardware.uwb.apex",
-        0
-    };
-    int disabled[10] = {0};
+    int s = (int)sys3(SYS_socket, AF_INET, SOCK_DGRAM, 0);
+    if (s < 0) {
+        klog("arm64droid-init: failed to create dgram socket\n");
+    }
 
-    sys3(34 /* SYS_mkdirat */, AT_FDCWD, (long)"/proc", 0755);
-    sys5(40 /* SYS_mount */, (long)"proc", (long)"/proc", (long)"proc", 0, 0);
-
+    int configured = 0;
     long last_hb = 0;
-    int all_disabled = 0;
+
     while (1) {
         long now = mono_ms();
-        if (now < 0) now = t0; 
+        if (now < 0) now = t0;
 
-        if (!root_changed && (now - t0) > 1000) {
-            sys3(34 /* SYS_mkdirat */, AT_FDCWD, (long)"/proc", 0755);
-            sys5(40 /* SYS_mount */, (long)"proc", (long)"/proc", (long)"proc", 0, 0);
-            int mnt_ns_fd = (int)sys4(SYS_openat, AT_FDCWD, (long)"/proc/1/ns/mnt", 0, 0);
-            if (mnt_ns_fd >= 0) {
-                long r = sys2(268 /* SYS_setns */, mnt_ns_fd, 0x20000 /* CLONE_NEWNS */);
-                if (r == 0) {
-                    sys3(34 /* SYS_mkdirat */, AT_FDCWD, (long)"/proc", 0755);
-                    sys5(40 /* SYS_mount */, (long)"proc", (long)"/proc", (long)"proc", 0, 0);
-                    if (sys4(79 /* SYS_newfstatat */, AT_FDCWD, (long)"/proc/1/root/vendor/apex/com.google.cf.disabled.apex", (long)st, 0) == 0) {
-                        long r2 = sys1(SYS_chroot, (long)"/proc/1/root");
-                        sys1(SYS_chdir, (long)"/");
-                        klog("arm64droid-init: successfully entered real root with /vendor!\n");
-                        root_changed = 1;
-                    }
-                }
-                sys1(SYS_close, mnt_ns_fd);
+        stub_crashing_services();
+
+        if (s >= 0 && !configured) {
+            if (setup_eth0(s) == 0) {
+                klog("arm64droid-init: eth0 configured successfully (10.0.2.15/24, gw 10.0.2.2)\n");
+                configured = 1;
             }
         }
 
-        if (root_changed && !all_disabled) {
-            all_disabled = 1;
-            for (int i = 0; bad_apexes[i]; i++) {
-                if (!disabled[i]) {
-                    long r = sys5(40 /* SYS_mount */, (long)disabled_apex, (long)bad_apexes[i], 0, 4096 /* MS_BIND */, 0);
-                    if (r == 0) {
-                        klog("arm64droid-init: disabled APEX successfully: ");
-                        klog(bad_apexes[i]);
-                        klog("\n");
-                        disabled[i] = 1;
-                    } else {
-                        all_disabled = 0;
-                    }
+        if (configured) {
+            static int serial_stopped = 0;
+            if (!serial_stopped) {
+                static char sp_stack[32768] __attribute__((aligned(16)));
+                long sp_pid = sys5(SYS_clone, 17, (long)(sp_stack + sizeof(sp_stack)), 0, 0, 0);
+                if (sp_pid == 0) {
+                    static const char a0[] = "/system/bin/setprop";
+                    static const char a1[] = "ctl.stop";
+                    static const char a2[] = "seriallogging";
+                    static const char *const argv[] = { a0, a1, a2, (const char *)0 };
+                    sys3(SYS_execve, (long)"/system/bin/setprop", (long)argv, 0);
+                    sys1(SYS_exit, 0);
                 }
-            }
-            if (all_disabled) {
-                static const char *const disabled_files[] = {
-                    "/vendor/etc/init/seriallogging.rc",
-                    "/vendor/etc/init/android.hardware.uwb-service.rc",
-                    "/vendor/etc/init/android.hardware.bluetooth-service.rc",
-                    "/vendor/etc/init/android.hardware.radio.data-service.rc",
-                    "/vendor/etc/permissions/android.hardware.uwb.xml",
-                    "/vendor/etc/permissions/com.google.cf.uwb.xml",
-                    "/vendor/etc/permissions/cuttlefish_uwb.xml",
-                    "/vendor/etc/permissions/android.hardware.bluetooth.xml",
-                    "/vendor/etc/permissions/android.hardware.bluetooth_le.xml",
-                    "/vendor/etc/permissions/android.hardware.telephony.data.xml",
-                    "/vendor/etc/permissions/android.hardware.telephony.gsm.xml",
-                    "/vendor/etc/permissions/android.hardware.telephony.cdma.xml",
-                    "/vendor/etc/permissions/android.hardware.telephony.ims.xml",
-                    "/vendor/etc/permissions/android.hardware.telephony.satellite.xml",
-                    "/vendor/etc/permissions/android.hardware.telephony.xml",
-                    "/vendor/etc/vintf/manifest/android.hardware.uwb-service.xml",
-                    "/vendor/etc/vintf/manifest/android.hardware.radio.data-service.xml",
-                    "/vendor/etc/vintf/manifest/android.hardware.radio.messaging-service.xml",
-                    "/vendor/etc/vintf/manifest/android.hardware.radio.modem-service.xml",
-                    "/vendor/etc/vintf/manifest/android.hardware.radio.network-service.xml",
-                    "/vendor/etc/vintf/manifest/android.hardware.radio.sim-service.xml",
-                    "/vendor/etc/vintf/manifest/android.hardware.radio.voice-service.xml",
-                    "/vendor/etc/vintf/manifest/android.hardware.bluetooth-service.default.xml",
-                    0
-                };
-                for (int k = 0; disabled_files[k]; k++) {
-                    sys5(40 /* SYS_mount */, (long)"/system/etc/hosts", (long)disabled_files[k], 0, 4096 /* MS_BIND */, 0);
-                }
-                klog("arm64droid-init: disabled seriallogging, UWB, Bluetooth, and telephony feature manifests!\n");
-                sys4(33 /* SYS_mknodat */, AT_FDCWD, (long)"/dev/ttyS1", 0666 | 0x2000 /* S_IFCHR */, (1 << 8) | 3 /* /dev/null */);
-                sys4(33 /* SYS_mknodat */, AT_FDCWD, (long)"/dev/ttyAMA1", 0666 | 0x2000 /* S_IFCHR */, (204 << 8) | 65 /* ttyAMA1 */);
-                sys3(36 /* SYS_symlinkat */, (long)"/dev/block/vda19", AT_FDCWD, (long)"/dev/block/by-name/frp");
-
-                /* Set up IDC files on existing /system/usr/idc directory */
-                sys5(40 /* SYS_mount */, (long)"tmpfs", (long)"/system/usr/idc", (long)"tmpfs", 0, 0);
-
-                const char tablet_idc[] = "touch.deviceType = touchScreen\ntouch.orientationAware = 1\ntouch.gestureMode = default\n";
-                const char mouse_idc[] = "touch.deviceType = pointer\n";
-
-                const char *tablet_names[] = {
-                    "/system/usr/idc/QEMU_Virtio_Tablet.idc",
-                    "/system/usr/idc/Vendor_0627_Product_0003.idc",
-                    0
-                };
-                for (int j = 0; tablet_names[j]; j++) {
-                    int idcfd = (int)sys4(SYS_openat, AT_FDCWD, (long)tablet_names[j], 65 /* O_WRONLY|O_CREAT|O_TRUNC */, 0644);
-                    if (idcfd >= 0) {
-                        sys3(SYS_write, idcfd, (long)tablet_idc, sizeof(tablet_idc) - 1);
-                        sys1(SYS_close, idcfd);
-                    }
-                }
-
-                /* Set up Keylayout mapping for Virtio Tablet (map BTN_LEFT 272 -> BTN_TOUCH) */
-                const char kl_data[] = "key 272   BTN_TOUCH\nkey 273   BACK\n";
-                const char *kl_names[] = {
-                    "/system/usr/keylayout/QEMU_Virtio_Tablet.kl",
-                    "/system/usr/keylayout/Vendor_0627_Product_0003.kl",
-                    0
-                };
-                for (int j = 0; kl_names[j]; j++) {
-                    int klfd = (int)sys4(SYS_openat, AT_FDCWD, (long)kl_names[j], 65 /* O_WRONLY|O_CREAT|O_TRUNC */, 0644);
-                    if (klfd >= 0) {
-                        sys3(SYS_write, klfd, (long)kl_data, sizeof(kl_data) - 1);
-                        sys1(SYS_close, klfd);
-                    }
-                }
-
-                const char *mouse_names[] = {
-                    "/system/usr/idc/QEMU_Virtio_Mouse.idc",
-                    "/system/usr/idc/Vendor_0627_Product_0001.idc",
-                    0
-                };
-                for (int j = 0; mouse_names[j]; j++) {
-                    int idcfd = (int)sys4(SYS_openat, AT_FDCWD, (long)mouse_names[j], 65 /* O_WRONLY|O_CREAT|O_TRUNC */, 0644);
-                    if (idcfd >= 0) {
-                        sys3(SYS_write, idcfd, (long)mouse_idc, sizeof(mouse_idc) - 1);
-                        sys1(SYS_close, idcfd);
-                    }
-                }
-                klog("arm64droid-init: configured IDC and KL for Virtio Tablet (touchScreen)!\n");
+                serial_stopped = 1;
             }
         }
 
-        if (now - last_hb > 60000) {
+        if (now - last_hb > 30000) {
             last_hb = now;
             klog("arm64droid-init: watchdog heartbeat\n");
+            if (s >= 0 && configured && !path_alive()) {
+                klog("arm64droid-init: network path lost, reconfiguring eth0\n");
+                /* Route flushes from Android netd can take several seconds to
+                 * settle (boot saga #21-#22, #33): a single setup_eth0 pass
+                 * usually lands in the middle of the flush and fails with
+                 * ENETUNREACH. Retry rapidly until the route table sticks. */
+                for (int attempt = 0; attempt < 6; attempt++) {
+                    if (setup_eth0(s) == 0) {
+                        klog("arm64droid-init: eth0 reconfigured successfully\n");
+                        break;
+                    }
+                    msleep(1000);
+                }
+            }
         }
 
-        struct timespec ts = { root_changed ? 2 : 0, root_changed ? 0 : 20000000 }; // 20ms during boot, 2s after switch_root
+        /* When the path is dead, re-probe faster than the 30s heartbeat so a
+         * late netd/flush recovery is picked up quickly instead of waiting. */
+        if (s >= 0 && configured && !path_alive()) {
+            struct timespec ts2 = { 0, 500000000 }; /* 500ms */
+            sys2(SYS_nanosleep, (long)&ts2, 0);
+            continue;
+        }
+
+        struct timespec ts = { configured ? 1 : 0, configured ? 0 : 50000000 }; // 50ms early, 1s steady
         sys2(SYS_nanosleep, (long)&ts, 0);
     }
 }
-/* child stack: 64 KiB */
+#define SYS_mknodat 33
+#define S_IFCHR 0020000
+
 static char child_stack[65536] __attribute__((aligned(16)));
+static char touch_stack[65536] __attribute__((aligned(16)));
+
+static void ensure_hvc_nodes(void)
+{
+    sys3(SYS_mkdirat, AT_FDCWD, (long)"/dev", 0755);
+    char path[16];
+    memcpy(path, "/dev/hvc", 8);
+    for (int i = 0; i < 16; i++) {
+        if (i < 10) {
+            path[8] = '0' + i;
+            path[9] = '\0';
+        } else {
+            path[8] = '1';
+            path[9] = '0' + (i - 10);
+            path[10] = '\0';
+        }
+        sys4(SYS_mknodat, AT_FDCWD, (long)path, S_IFCHR | 0666, (229 << 8) | i);
+    }
+}
 
 void _start(void)
 {
+    ensure_hvc_nodes();
+
+    /* Fork touch daemon child so it listens on TCP 6666 immediately */
+    long touch_pid = sys5(SYS_clone, 17, (long)(touch_stack + sizeof(touch_stack)), 0, 0, 0);
+    if (touch_pid == 0) {
+        static const char t_argv0[] = "/touch_daemon";
+        static const char *const t_argv[] = { t_argv0, (const char *)0 };
+        sys3(SYS_execve, (long)"/touch_daemon", (long)t_argv, 0);
+        sys1(SYS_exit, 0);
+    }
+
     /* Clone the watchdog/network child process. 
      * 17 = SIGCHLD */
     long pid = sys5(SYS_clone, 17, (long)(child_stack + sizeof(child_stack)), 0, 0, 0);

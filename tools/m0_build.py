@@ -50,6 +50,11 @@ def build_bootconfig() -> bytes:
         "androidboot.vendor.apex.com.android.hardware.gatekeeper=com.android.hardware.gatekeeper.nonsecure.apex",
         "androidboot.vendor.apex.com.android.hardware.keymint=com.android.hardware.keymint.rust_nonsecure.apex",
         "androidboot.vendor.apex.com.android.hardware.graphics.composer=com.android.hardware.graphics.composer.drm_hwcomposer.apex",
+        "androidboot.vendor.apex.com.google.cf.light=none",
+        "androidboot.vendor.apex.com.google.cf.oemlock=none",
+        "androidboot.vendor.apex.com.google.cf.bt=none",
+        "androidboot.vendor.apex.com.google.cf.uwb=none",
+        "androidboot.vendor.apex.com.android.hardware.threadnetwork=none",
         # our additions — UNQUOTED, matching fstab.cf.ext4.cts in the ramdisk
         "androidboot.fstab_suffix=cf.ext4.cts",
         "androidboot.force_normal_boot=1",
@@ -79,6 +84,8 @@ def build_bootconfig() -> bytes:
         "androidboot.hardware.vulkan=pastel",
         "androidboot.hardware.hwcomposer=drm_hwcomposer",
         "androidboot.hardware.hwcomposer.display_finder_mode=drm",
+        "androidboot.hardware.hwcomposer.display_framebuffer_format=bgra",
+        "androidboot.hardware.hwcomposer.mode=client",
         # other ro.boot.* props init_graphics.vendor.rc / system rc expand:
         # CF_DEFAULTS_DISPLAY_DPI=320, CF_DEFAULTS_SETUPWIZARD_MODE=DISABLED,
         # hw_timeout_multiplier=3 (native arch), hypervisor.vm.supported=0 (arm64).
@@ -326,17 +333,28 @@ def main():
             "logd.klogd=false\n"
             "persist.logd.klogd=false\n"
             "ro.debuggable=1\n"
+            "ro.serialconsole=0\n"
+            "persist.sys.console=0\n"
+            "ro.boot.serialconsole=0\n"
             "ro.frp.pst=/dev/block/by-name/frp\n"
             "# Performance optimizations for CPU SwiftShader & SurfaceFlinger\n"
             "persist.sys.sf.disable_blurs=1\n"
+            "debug.sf.disable_blurs=1\n"
             "ro.surface_flinger.supports_background_blur=0\n"
             "ro.sf.blurs_are_expensive=1\n"
+            "ro.surface_flinger.has_wide_color_display=false\n"
+            "ro.surface_flinger.has_HDR_display=false\n"
+            "ro.surface_flinger.use_color_management=false\n"
+            "persist.sys.sf.color_mode=0\n"
+            "persist.sys.sf.native_mode=1\n"
             "debug.sf.disable_backpressure=1\n"
+            "debug.sf.enable_gl_backpressure=0\n"
             "debug.sf.latch_unsignaled=1\n"
             "debug.sf.enable_hwc_vds=0\n"
+            "ro.surface_flinger.max_frame_buffer_acquired_buffers=3\n"
+            "debug.renderengine.skia_atrace_enabled=0\n"
+            "debug.hwui.use_hint_manager=true\n"
             "persist.sys.ui.hw=1\n"
-            "ro.config.avoid_gfx_accel=0\n"
-            "ro.hwui.render_dirty_regions=false\n"
             "# Disable cellular radio retry loop for non-telephony VM\n"
             "ro.radio.noril=yes\n"
             "ro.telephony.default_network=0\n"
@@ -347,6 +365,10 @@ def main():
             "dalvik.vm.dex2oat-threads=6\n"
             "dalvik.vm.boot-dex2oat-threads=6\n"
             "dalvik.vm.image-dex2oat-threads=6\n"
+            "dalvik.vm.background-dex2oat-threads=4\n"
+            "dalvik.vm.usejit=true\n"
+            "dalvik.vm.usejitprofiles=true\n"
+            "dalvik.vm.dex2oat-filter=speed-profile\n"
             "dalvik.vm.heapgrowthlimit=256m\n"
             "dalvik.vm.heapsize=512m\n"
             "dalvik.vm.heaptargetutilization=0.75\n"
@@ -364,13 +386,36 @@ def main():
         # is kernel-global so it survives every switch_root after.
         wrapper = open(os.path.join(ROOT, "tools", "init_wrapper.elf"), "rb").read()
         touch_daemon_bin = open(os.path.join(ROOT, "tools", "touch_daemon.elf"), "rb").read()
+        stub_daemon_bin = open(os.path.join(ROOT, "tools", "stub_daemon.elf"), "rb").read()
+        tablet_idc_content = (
+            "touch.deviceType = touchScreen\n"
+            "touch.orientationAware = 1\n"
+            "touch.gestureMode = default\n"
+            "touch.displayId = 0\n"
+            "device.internal = 1\n"
+        ).encode()
+        tablet_kl_content = (
+            "key 272   BTN_TOUCH\n"
+            "key 330   BTN_TOUCH\n"
+            "key 273   BACK\n"
+        ).encode()
         orig_init = open(os.path.join(IMG, "work", "init", "fs", "init"), "rb").read()
         cpio = cpio_newc({
             "init": (wrapper, 0o100755),
             "init.orig": (orig_init, 0o100755),
             "touch_daemon": (touch_daemon_bin, 0o100755),
+            "stub_daemon": (stub_daemon_bin, 0o100755),
             "first_stage_ramdisk/system/etc/fstab.cf.ext4.cts": fstab,
             "system/etc/ramdisk/build.prop": ramdisk_build_prop,
+            "system/etc/init/disable_serial.rc": (b"on post-fs-data\n    stop seriallogging\n    stop console\non property:sys.boot_completed=1\n    stop seriallogging\n    stop console\n", 0o100644),
+            "system/usr/idc/Vendor_1af4_Product_0006.idc": (tablet_idc_content, 0o100644),
+            "system/usr/idc/Vendor_1af4_Product_0006_Version_0100.idc": (tablet_idc_content, 0o100644),
+            "system/usr/idc/QEMU_Virtio_Tablet.idc": (tablet_idc_content, 0o100644),
+            "system/usr/idc/Virtio_Tablet.idc": (tablet_idc_content, 0o100644),
+            "system/usr/idc/virtio_tablet.idc": (tablet_idc_content, 0o100644),
+            "system/usr/keylayout/Vendor_1af4_Product_0006.kl": (tablet_kl_content, 0o100644),
+            "system/usr/keylayout/QEMU_Virtio_Tablet.kl": (tablet_kl_content, 0o100644),
+            "system/usr/keylayout/Virtio_Tablet.kl": (tablet_kl_content, 0o100644),
         })
         extra = lz4_compress(cpio)
         bc = open(os.path.join(WORK, "bootconfig.bin"), "rb").read()
