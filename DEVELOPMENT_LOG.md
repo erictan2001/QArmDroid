@@ -154,3 +154,19 @@ only backend is none (vnc also absent from msys2 stock). launch.ps1 now
 probes -display help on the selected binary and auto-resolves: windowed
 modes switch to msys2 QEMU with GPU forced basic; vnc degrades to none with
 a visible warning. Verified via -PrintArgs matrix + live sdl spawn.
+
+## SDL color inversion investigation (2026-08-24)
+Symptom: -DisplayMode sdl shows R/B-swapped UI. Quantified via QMP screendump
+vs adb screencap saturation analysis: 1007/1007 saturated pixels swapped.
+Lever matrix ALL produced identical swap: bootconfig display_framebuffer_format
+bgra->rgba (composer ignores it), gralloc minigbm->default (no effect),
+pixman vs GL-on scanout (identical), custom-vs-msys2 binary (identical).
+Conclusion: guest DRM/minigbm format-naming mismatch baked into this AOSP
+image; unreachable via cmdline/props. Input over USB HID proven healthy
+(HMP sendkey -> /dev/input/event1 KEY_B/C/SPACE events). Correct-color
+windowed viewing remains scrcpy; color-correct GPU windows return when
+Qualcomm ships VK_KHR_external_memory_win32 (unlocks gfxstream compositor).
+Side-gains kept: custom QEMU rebuilt WITH sdl enabled (single binary for
+headless+gfxstream+window), launcher gained -MonitorPort/-SdlGl/
+-GrallockOverride switches; m0_build bootconfig/initrd caching pitfall
+documented (must run bootconfig stage before initrd after edits).

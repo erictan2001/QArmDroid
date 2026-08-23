@@ -41,7 +41,10 @@ param(
     [int]$Cores = 6,
     [string]$QemuPath = "",
     [switch]$Headless,
-    [switch]$PrintArgs
+    [switch]$PrintArgs,
+    [int]$MonitorPort = 0,
+    [string]$GrallockOverride = '',
+    [switch]$SdlGl
 )
 
 # ------------------------------------------------------------------ PATH ----
@@ -85,7 +88,7 @@ function Get-QemuDisplayCaps {
     foreach ($line in ($help -split "`n")) {
         if ($line -match '^\s*([a-z][a-z0-9-]+)\s*$') { $types += $Matches[1] }
     }
-    if ($types.Count -eq 0) { return @("none") }   # custom minimal build
+    if ($types.Count -eq 0) { $arr = @("none") }   # custom minimal build
     return $types
 }
 
@@ -149,6 +152,12 @@ function Build-QemuArgs {
               "printk.devkmsg=on audit=0 panic=-1 8250.nr_uarts=4 " +
               "binder.impl=rust cma=0 firmware_class.path=/vendor/etc/ " +
               "loop.max_part=7 init=/init bootconfig"
+    # Optional gralloc override (e.g. 'default' fixes R/B-swap on plain
+    # virtio-gpu scanout by using the CPU gralloc instead of minigbm).
+    # Appended LAST: androidboot last-wins for duplicate keys.
+    if ($GrallockOverride) {
+        $append += " androidboot.hardware.gralloc=$GrallockOverride"
+    }
 
     # Display backend + whether windowed input devices attach.
     # Input note (verified via getevent, 2026-08): virtio-keyboard/tablet are
@@ -158,7 +167,7 @@ function Build-QemuArgs {
         '^(embedded|vnc)$' {
             $display = @("-display", "vnc=127.0.0.1:0,websocket=5901,lossy=off,non-adaptive=on"); $windowed = $true }
         '^gtk$'   { $display = @("-display", "gtk"); $windowed = $true }
-        '^sdl$'   { $display = @("-display", "sdl"); $windowed = $true }
+        '^sdl$'   { $d = if ($SdlGl) { "sdl,gl=on" } else { "sdl" }; $display = @("-display", $d); $windowed = $true }
         '^(scrcpy|none|headless)$' {
             $display = @("-display", "none"); $windowed = $false }
         default   { $display = @("-display", $DisplayMode); $windowed = $true }
@@ -185,7 +194,7 @@ function Build-QemuArgs {
     # Assemble: machine/base -> storage -> net -> gpu -> consoles -> input ->
     # display -> serial/monitor -> cmdline. Order groups mirror historical
     # working invocations (see docs/history/BUILD_LOG.md).
-    return @(
+    $arr = @(
         "-accel", "whpx",
         "-cpu", "host",
         "-machine", "virt,gic-version=3,highmem=on",
@@ -203,11 +212,19 @@ function Build-QemuArgs {
     ) + $hvc + $inputDev + $display + @(
         "-chardev", "file,id=char0,path=$SerialLog",
         "-serial", "chardev:char0",
-        "-serial", "null", "-serial", "null", "-serial", "null",
-        "-monitor", "none",
+        "-serial", "null",
+        "-serial", "null",
+        "-serial", "null",
         "-no-reboot",
         "-append", $append
     )
+    if ($MonitorPort -gt 0) {
+        $arr += @("-chardev", "socket,id=mon0,host=127.0.0.1,port=$MonitorPort,server=on,wait=off",
+                  "-mon", "chardev=mon0,mode=readline")
+    } else {
+        $arr += @("-monitor", "none")
+    }
+    return $arr
 }
 
 $QemuArgs = Build-QemuArgs -DisplayMode $DisplayMode -GpuMode $GpuMode `
@@ -244,3 +261,5 @@ Write-Host " ADB Target   : 127.0.0.1:5555" -ForegroundColor Yellow
 Write-Host "==========================================================" -ForegroundColor Cyan
 
 & $QemuPath $QemuArgs
+
+
