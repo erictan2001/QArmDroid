@@ -11,6 +11,7 @@ Historical session documents live in `DEVELOPMENT_LOG.md`, `PERFORMANCE.md`,
 |---|---|---|
 | Android 16 ARM64 boot | ✅ | QEMU + WHPX, ~2–4 min to `sys.boot_completed=1` |
 | Launch entry point | ✅ | **`tools\launch.ps1` only** — all other launchers deleted |
+| Windowed display (sdl/gtk) | ✅ | Auto-switches to msys2 QEMU (custom build is headless-only); GPU falls back to basic |
 | USB keyboard + mouse | ✅ | Windowed display modes; verified via getevent |
 | adb over TCP | ✅ | `adb connect 127.0.0.1:5555` |
 | Touch via adb / scrcpy | ✅ | scrcpy capped at 30 fps / 960p / 2M (measured optimum) |
@@ -52,3 +53,4 @@ Parameters: `-DisplayMode none|scrcpy|embedded|vnc|gtk|sdl`,
 - Driver-capability evidence: `research/docs/`.
 - Custom QEMU/gfxstream build environment: `tools/qemu-gfxstream/`
   (see its BUILD_STATUS.md for why gfxstream is platform-blocked).
+

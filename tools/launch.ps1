@@ -70,6 +70,52 @@ foreach ($p in $pathAdditions) {
 $NewIcd = 'C:\Windows\System32\DriverStore\FileRepository\qcdx8380.inf_arm64_97b66cecb1490986\qcvk_icd_arm64x.json'
 if (Test-Path $NewIcd) { $env:VK_DRIVER_FILES = $NewIcd }
 
+# ------------------------------------------------- binary/display resolver --
+# The repo-local custom QEMU was built --disable-gtk --disable-sdl
+# --disable-vnc: its only usable backend is 'none' (headless). Windowed
+# modes must ride the stock msys2 binary, which lacks rutabaga -> GPU falls
+# back to basic. Resolve that here instead of failing with QEMU's cryptic
+# "Parameter 'type' does not accept value 'sdl'".
+$MsysQemu = "C:\msys64\clangarm64\bin\qemu-system-aarch64.exe"
+
+function Get-QemuDisplayCaps {
+    param([string]$Exe)
+    $help = (& $Exe -display help 2>&1 | Out-String)
+    $types = @()
+    foreach ($line in ($help -split "`n")) {
+        if ($line -match '^\s*([a-z][a-z0-9-]+)\s*$') { $types += $Matches[1] }
+    }
+    if ($types.Count -eq 0) { return @("none") }   # custom minimal build
+    return $types
+}
+
+$caps     = Get-QemuDisplayCaps -Exe $QemuPath
+$reqType  = switch -Regex ($DisplayMode) {
+                '^(embedded|vnc)$'      { "vnc"; break }
+                '^(scrcpy|none|headless)$' { "none"; break }
+                '^gtk$'                 { "gtk"; break }
+                '^sdl$'                 { "sdl"; break }
+                default                 { $DisplayMode }
+            }
+
+if ($reqType -ne "none" -and $caps -notcontains $reqType) {
+    $msysCaps = @()
+    if (Test-Path $MsysQemu) { $msysCaps = Get-QemuDisplayCaps -Exe $MsysQemu }
+    if ($msysCaps -contains $reqType) {
+        Write-Host "[launch] '$reqType' needs the stock msys2 QEMU (custom build is headless-only)." -ForegroundColor Yellow
+        Write-Host "[launch] Switching binary; GPU falls back to basic (no rutabaga in msys2)." -ForegroundColor Yellow
+        $QemuPath = $MsysQemu
+        $GpuMode  = "basic"
+    }
+    elseif ($reqType -eq "vnc") {
+        Write-Host "[launch] WARNING: no installed QEMU supports vnc; degrading DisplayMode to none." -ForegroundColor Yellow
+        $DisplayMode = "none"
+    }
+    else {
+        Write-Error "Requested display '$reqType' unsupported by $QemuPath and fallback unavailable."
+    }
+}
+
 # ------------------------------------------------------------- display ----- #
 $ErrorActionPreference = "Continue"   # never Stop: PS5.1 + native stderr = instant death
 if ($Headless) { $DisplayMode = "none" }

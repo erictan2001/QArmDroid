@@ -146,3 +146,11 @@ Unique facts preserved here before deletion:
   zero stderr. Fix: PATH bootstrap at top of launch.ps1. Secondary hardening:
   $ErrorActionPreference must stay Continue (PS5.1 + native stderr banner =
   terminating NativeCommandError under Stop).
+
+## Display-binary resolution (2026-08-23, post-cleanup)
+User hit "Parameter 'type' does not accept value 'sdl'" on -DisplayMode sdl:
+custom QEMU was configured --disable-gtk/--disable-sdl/--disable-vnc, so its
+only backend is none (vnc also absent from msys2 stock). launch.ps1 now
+probes -display help on the selected binary and auto-resolves: windowed
+modes switch to msys2 QEMU with GPU forced basic; vnc degrades to none with
+a visible warning. Verified via -PrintArgs matrix + live sdl spawn.

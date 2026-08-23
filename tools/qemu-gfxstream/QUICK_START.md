@@ -12,6 +12,17 @@ tools\launch.ps1                 # boots headless; watchdog enforces 1280x800
 adb connect 127.0.0.1:5555       # after ~2-4 min, sys.boot_completed=1
 ```
 
+## Display modes & binary auto-selection
+
+The repo-local custom QEMU is headless-only (`--disable-gtk --disable-sdl --disable-vnc`).
+launch.ps1 probes `-display help` and resolves automatically:
+
+| Requested | Resolved |
+|---|---|
+| none / scrcpy | custom QEMU + chosen GpuMode |
+| sdl / gtk / egl-headless | msys2 stock QEMU, GPU forced basic |
+| embedded / vnc | no installed QEMU has vnc -> degrades to none with warning |
+
 ## Boot with a window (USB keyboard + mouse)
 
 ```powershell
@@ -31,3 +42,4 @@ tools\launch.ps1 -PrintArgs
   VK_KHR_external_memory_win32 — falls back to SwiftShader (~10 fps).
 - `-GpuMode basic`: plain virtio-gpu-pci; also works with the stock
   msys2 QEMU via `-QemuPath C:\msys64\clangarm64\bin\qemu-system-aarch64.exe`.
+
