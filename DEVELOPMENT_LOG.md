@@ -170,3 +170,14 @@ Side-gains kept: custom QEMU rebuilt WITH sdl enabled (single binary for
 headless+gfxstream+window), launcher gained -MonitorPort/-SdlGl/
 -GrallockOverride switches; m0_build bootconfig/initrd caching pitfall
 documented (must run bootconfig stage before initrd after edits).
+
+## Arch review Candidate 5 complete (2026-08-24)
+- Removed dead aperture transport: src/shm_ring.rs, --aperture mode,
+  aperture_loop, unconditional 16 MB block; PROTOCOL.md TCP-only claim now true.
+- Payload packing collapsed: 7 shared builders in dispatch.rs replace hand-
+  packed byte arrays in selftest + render_to_file (single Rust definition
+  per wire layout alongside the parser).
+- Verified: cargo check clean, 7/7 unit tests, release selftest PASSED on
+  Adreno X1-85 AFTER fixing a stale-daemon exe-lock that had made the first
+  selftest run validate pre-refactor code (kill daemon, relink, re-run).
+- All six architecture-review candidates now closed or deferred-by-design.

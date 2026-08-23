@@ -1,6 +1,5 @@
-//! Opcode dispatcher: turns guest-side Vulkan requests (from the TCP IPC
-//! channel or the shared-memory aperture ring) into real host-side Vulkan
-//! calls through `HostVulkanEngine`.
+//! Opcode dispatcher: turns guest-side Vulkan requests from the TCP IPC
+//! channel into real host-side Vulkan calls through `HostVulkanEngine`.
 //!
 //! Wire protocol (host end, port 6520):
 //!   request  = magic u32 ('AVKQ'), opcode u32, seq u32, payload_len u32, payload
@@ -58,6 +57,56 @@ pub const OP_READ_PIXELS: u32 = 11;
 pub const PROTO_MAGIC_REQ: u32 = 0x514b_5641; // 'AVKQ'
 pub const PROTO_MAGIC_RSP: u32 = 0x4156_4b41; // 'AVKA'
 pub const PROTO_MAX_PAYLOAD: usize = 1 << 20;
+
+// ---- payload builders -----------------------------------------------------
+// Single definition per wire layout (see PROTOCOL.md). Host-side callers
+// (selftest, --render) MUST use these instead of hand-packing bytes so the
+// layouts have exactly one Rust definition alongside the parser below.
+
+/// A single little-endian u32 payload.
+pub fn payload_u32(v: u32) -> Vec<u8> {
+    v.to_le_bytes().to_vec()
+}
+
+/// OP_ALLOCATE_MEMORY: size u64, flags u32.
+pub fn payload_allocate_memory(size: u64, flags: u32) -> Vec<u8> {
+    let mut p = size.to_le_bytes().to_vec();
+    p.extend_from_slice(&flags.to_le_bytes());
+    p
+}
+
+/// OP_CREATE_BUFFER: size u64, usage u32.
+pub fn payload_create_buffer(size: u64, usage: u32) -> Vec<u8> {
+    payload_allocate_memory(size, usage)
+}
+
+/// OP_CREATE_IMAGE: width u32, height u32, format u32, usage u32.
+pub fn payload_create_image(width: u32, height: u32, format: u32, usage: u32) -> Vec<u8> {
+    let mut p = width.to_le_bytes().to_vec();
+    p.extend_from_slice(&height.to_le_bytes());
+    p.extend_from_slice(&format.to_le_bytes());
+    p.extend_from_slice(&usage.to_le_bytes());
+    p
+}
+
+/// OP_BIND_RENDER_BUFFER: buffer handle u64, memory handle u64.
+pub fn payload_bind_render_buffer(buffer_handle: u64, memory_handle: u64) -> Vec<u8> {
+    let mut p = buffer_handle.to_le_bytes().to_vec();
+    p.extend_from_slice(&memory_handle.to_le_bytes());
+    p
+}
+
+/// OP_RENDER_FRAME: width u32, height u32.
+pub fn payload_render_frame(width: u32, height: u32) -> Vec<u8> {
+    let mut p = width.to_le_bytes().to_vec();
+    p.extend_from_slice(&height.to_le_bytes());
+    p
+}
+
+/// OP_READ_PIXELS: byte size u64.
+pub fn payload_read_pixels(byte_size: u64) -> Vec<u8> {
+    byte_size.to_le_bytes().to_vec()
+}
 
 pub fn opcode_name(op: u32) -> &'static str {
     match op {

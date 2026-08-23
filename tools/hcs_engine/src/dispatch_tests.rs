@@ -2,7 +2,7 @@
 //!
 //! These tests are the regression loop: they drive the *real* host Vulkan
 //! runtime through the same `dispatch::dispatch` path the TCP IPC service
-//! and aperture ring use. On a machine without a Vulkan 1.x runtime the
+//! uses. On a machine without a Vulkan 1.x runtime the
 //! probe test fails loudly instead of the daemon silently degrading.
 //!
 //! They live in the lib (unit-test harness) because this Windows ARM64
@@ -102,44 +102,5 @@ mod tests {
         assert_ne!(r.status, VK_SUCCESS);
         let r = dispatch::dispatch(&e, 0xdead_beef, &[]);
         assert_ne!(r.status, VK_SUCCESS, "unknown opcodes must be rejected");
-    }
-
-    /// Simulates a guest producer writing a packet into the shared-memory
-    /// aperture ring, then verifies the host consumer+dispatcher executes it.
-    #[test]
-    fn aperture_ring_dispatches_guest_packets() {
-        use crate::shm_ring::{ShmApertureConsumer, VkCommandPacket};
-        use std::sync::atomic::Ordering;
-
-        let mut buf = vec![0u8; 64 * 1024];
-        let ptr = buf.as_mut_ptr();
-        let mut consumer =
-            unsafe { ShmApertureConsumer::new(ptr, buf.len()) }.expect("aperture must init");
-
-        // --- guest producer side ---
-        let header = unsafe { &*(ptr as *const crate::shm_ring::ShmApertureHeader) };
-        let head = header.head.load(Ordering::Relaxed) as usize;
-        let pkt = VkCommandPacket {
-            opcode: dispatch::OP_CREATE_DEVICE,
-            payload_size: 0,
-            cookie: 42,
-        };
-        unsafe {
-            let p = &pkt as *const VkCommandPacket as *const u8;
-            for i in 0..size_of::<VkCommandPacket>() {
-                *consumer.ring_buf.add((head + i) % consumer.capacity) = *p.add(i);
-            }
-        }
-        header
-            .head
-            .store((head + size_of::<VkCommandPacket>()) as u32, Ordering::Release);
-
-        // --- host consumer + dispatcher side ---
-        let (pkt_out, payload) = consumer.poll_packet().expect("packet must be available");
-        assert_eq!(pkt_out.cookie, 42);
-        let e = engine();
-        let r = dispatch::dispatch(&e, pkt_out.opcode, &payload);
-        assert_eq!(r.status, VK_SUCCESS, "aperture dispatch failed: {}", r.detail);
-        assert_ne!(r.handles[0], 0, "device handle through aperture path");
     }
 }

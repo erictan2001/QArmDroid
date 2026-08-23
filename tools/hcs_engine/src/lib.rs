@@ -6,12 +6,10 @@
 //!     logical device + queue, and keeps a dispatch table.
 //!   * `dispatch`   — executes guest opcodes against the host engine.
 //!   * `hcs`        — probes the Microsoft Host Compute System client DLL.
-//!   * `shm_ring`   — the legacy shared-memory aperture ring simulation.
 
 pub mod dispatch;
 pub mod hcs;
 pub mod render;
-pub mod shm_ring;
 pub mod vulkan_host;
 
 #[cfg(test)]

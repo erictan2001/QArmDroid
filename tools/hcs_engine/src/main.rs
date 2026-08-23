@@ -7,8 +7,7 @@
 //!   3. Serve a framed Vulkan-passthrough IPC protocol on 127.0.0.1:6520
 //!      for guest clients (reached from the Android guest via the QEMU
 //!      slirp gateway at 10.0.2.2:6520).
-//!   4. Optionally (`--aperture`) poll the legacy shared-memory ring.
-//!   5. `--selftest` runs every opcode once and prints a report — the fast
+//!   4. `--selftest` runs every opcode once and prints a report — the fast
 //!      feedback loop for verifying the passthrough pipeline on this host.
 //!
 //! Exit: Ctrl-C / Ctrl-Break / console close triggers a graceful shutdown.
@@ -17,7 +16,6 @@ mod ctrl;
 
 use hcs_engine::dispatch::{self, DispatchResult, PROTO_MAGIC_REQ, PROTO_MAGIC_RSP, PROTO_MAX_PAYLOAD};
 use hcs_engine::hcs::HcsApi;
-use hcs_engine::shm_ring::ShmApertureConsumer;
 use hcs_engine::vulkan_host::{HostVulkanEngine, VK_ERROR_UNKNOWN, VK_SUCCESS};
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -122,26 +120,6 @@ fn serve_tcp(engine: Arc<HostVulkanEngine>, running: Arc<AtomicBool>) -> std::io
     Ok(())
 }
 
-fn aperture_loop(mut consumer: ShmApertureConsumer, engine: Arc<HostVulkanEngine>, running: Arc<AtomicBool>) {
-    println!("[+] Aperture ring polling enabled (legacy shared-memory path)");
-    while running.load(Ordering::Relaxed) {
-        while let Some((pkt, payload)) = consumer.poll_packet() {
-            let r = dispatch::dispatch(&engine, pkt.opcode, &payload);
-            println!(
-                "[*] aperture packet opcode {:3} {:<14} (cookie {}) -> status {}",
-                pkt.opcode,
-                dispatch::opcode_name(pkt.opcode),
-                pkt.cookie,
-                r.status
-            );
-            if !r.detail.is_empty() {
-                println!("    detail: {}", r.detail);
-            }
-        }
-        thread::sleep(Duration::from_millis(10));
-    }
-}
-
 /// Run every opcode once against the live host engine and print a report.
 /// Exit code 0 when all expected statuses are observed.
 fn selftest(engine: &HostVulkanEngine) -> i32 {
@@ -171,39 +149,40 @@ fn selftest(engine: &HostVulkanEngine) -> i32 {
         println!("    device=0x{:X} queue=0x{:X} family={}", r.handles[0], r.handles[1], r.handles[2]);
     }
 
-    let mut alloc = Vec::new();
-    alloc.extend_from_slice(&(1u64 << 20).to_le_bytes()); // 1 MiB
-    alloc.extend_from_slice(&1u32.to_le_bytes()); // prefer host-visible
-    let r = dispatch::dispatch(engine, dispatch::OP_ALLOCATE_MEMORY, &alloc);
+    let r = dispatch::dispatch(
+        engine,
+        dispatch::OP_ALLOCATE_MEMORY,
+        &dispatch::payload_allocate_memory(1 << 20, 1), // 1 MiB, host-visible
+    );
     check("AllocateMemory", &r, VK_SUCCESS);
     if r.status == VK_SUCCESS {
         println!("    memory=0x{:X} type={}", r.handles[0], r.handles[1]);
     }
 
-    let mut buf = Vec::new();
-    buf.extend_from_slice(&(64u64 << 10).to_le_bytes()); // 64 KiB
-    buf.extend_from_slice(&0u32.to_le_bytes()); // usage: caller default (storage)
-    let r = dispatch::dispatch(engine, dispatch::OP_CREATE_BUFFER, &buf);
+    let r = dispatch::dispatch(
+        engine,
+        dispatch::OP_CREATE_BUFFER,
+        &dispatch::payload_create_buffer(64 << 10, 0), // 64 KiB, storage
+    );
     check("CreateBuffer", &r, VK_SUCCESS);
     if r.status == VK_SUCCESS {
         println!("    buffer=0x{:X}", r.handles[0]);
     }
 
-    let mut img = Vec::new();
-    img.extend_from_slice(&64u32.to_le_bytes()); // width
-    img.extend_from_slice(&64u32.to_le_bytes()); // height
-    img.extend_from_slice(&37u32.to_le_bytes()); // VK_FORMAT_R8G8B8A8_UNORM
-    img.extend_from_slice(&20u32.to_le_bytes()); // sampled | color attachment
-    let r = dispatch::dispatch(engine, dispatch::OP_CREATE_IMAGE, &img);
+    let r = dispatch::dispatch(
+        engine,
+        dispatch::OP_CREATE_IMAGE,
+        &dispatch::payload_create_image(64, 64, 37, 20), // RGBA8_UNORM, sampled|color-attachment
+    );
     check("CreateImage", &r, VK_SUCCESS);
     if r.status == VK_SUCCESS {
         println!("    image=0x{:X}", r.handles[0]);
     }
 
-    let r = dispatch::dispatch(engine, dispatch::OP_QUEUE_SUBMIT, &[0u8, 0, 0, 0]);
+    let r = dispatch::dispatch(engine, dispatch::OP_QUEUE_SUBMIT, &dispatch::payload_u32(0));
     check("QueueSubmit", &r, VK_SUCCESS);
 
-    let r = dispatch::dispatch(engine, dispatch::OP_QUEUE_PRESENT, &[0u8, 0, 0, 0]);
+    let r = dispatch::dispatch(engine, dispatch::OP_QUEUE_PRESENT, &dispatch::payload_u32(0));
     // Documented limitation: no WSI surface on the native path.
     check("QueuePresent (no WSI)", &r, hcs_engine::vulkan_host::VK_ERROR_OUT_OF_DATE_KHR);
 
@@ -215,35 +194,41 @@ fn selftest(engine: &HostVulkanEngine) -> i32 {
     const RH: u32 = 64;
     let frame_size = (RW * RH * 4) as u64;
 
-    let mut buf = Vec::new();
-    buf.extend_from_slice(&frame_size.to_le_bytes());
-    buf.extend_from_slice(&0u32.to_le_bytes()); // usage: default (storage)
-    let r = dispatch::dispatch(engine, dispatch::OP_CREATE_BUFFER, &buf);
+    let r = dispatch::dispatch(
+        engine,
+        dispatch::OP_CREATE_BUFFER,
+        &dispatch::payload_create_buffer(frame_size, 0),
+    );
     check("RenderCreateBuffer", &r, VK_SUCCESS);
     let buffer_handle = r.handles[0];
 
-    let mut alloc = Vec::new();
-    alloc.extend_from_slice(&frame_size.to_le_bytes());
-    alloc.extend_from_slice(&1u32.to_le_bytes()); // host-visible+coherent
-    let r = dispatch::dispatch(engine, dispatch::OP_ALLOCATE_MEMORY, &alloc);
+    let r = dispatch::dispatch(
+        engine,
+        dispatch::OP_ALLOCATE_MEMORY,
+        &dispatch::payload_allocate_memory(frame_size, 1), // host-visible+coherent
+    );
     check("RenderAllocateMemory", &r, VK_SUCCESS);
     let memory_handle = r.handles[0];
 
-    let mut bind = Vec::new();
-    bind.extend_from_slice(&buffer_handle.to_le_bytes());
-    bind.extend_from_slice(&memory_handle.to_le_bytes());
-    let r = dispatch::dispatch(engine, dispatch::OP_BIND_RENDER_BUFFER, &bind);
+    let r = dispatch::dispatch(
+        engine,
+        dispatch::OP_BIND_RENDER_BUFFER,
+        &dispatch::payload_bind_render_buffer(buffer_handle, memory_handle),
+    );
     check("BindRenderBuffer", &r, VK_SUCCESS);
 
-    let mut frame = Vec::new();
-    frame.extend_from_slice(&RW.to_le_bytes());
-    frame.extend_from_slice(&RH.to_le_bytes());
-    let r = dispatch::dispatch(engine, dispatch::OP_RENDER_FRAME, &frame);
+    let r = dispatch::dispatch(
+        engine,
+        dispatch::OP_RENDER_FRAME,
+        &dispatch::payload_render_frame(RW, RH),
+    );
     check("RenderFrame", &r, VK_SUCCESS);
 
-    let mut read = Vec::new();
-    read.extend_from_slice(&frame_size.to_le_bytes());
-    let r = dispatch::dispatch(engine, dispatch::OP_READ_PIXELS, &read);
+    let r = dispatch::dispatch(
+        engine,
+        dispatch::OP_READ_PIXELS,
+        &dispatch::payload_read_pixels(frame_size),
+    );
     check("ReadPixels", &r, VK_SUCCESS);
     if r.status == VK_SUCCESS {
         let non_zero = r.data.iter().filter(|&&b| b != 0).count();
@@ -260,48 +245,54 @@ fn selftest(engine: &HostVulkanEngine) -> i32 {
 /// dispatch -> readback) and dump the raw frame to a file.
 fn render_to_file(engine: &HostVulkanEngine, width: u32, height: u32, out_path: &str) -> i32 {
     let frame_size = (width as u64) * (height as u64) * 4;
-    let mut buf = Vec::new();
-    buf.extend_from_slice(&frame_size.to_le_bytes());
-    buf.extend_from_slice(&0u32.to_le_bytes());
-    let r = dispatch::dispatch(engine, dispatch::OP_CREATE_BUFFER, &buf);
+    let r = dispatch::dispatch(
+        engine,
+        dispatch::OP_CREATE_BUFFER,
+        &dispatch::payload_create_buffer(frame_size, 0),
+    );
     if r.status != VK_SUCCESS {
         eprintln!("[-] create buffer failed: {}", r.detail);
         return 1;
     }
     let buffer_handle = r.handles[0];
 
-    let mut alloc = Vec::new();
-    alloc.extend_from_slice(&frame_size.to_le_bytes());
-    alloc.extend_from_slice(&1u32.to_le_bytes());
-    let r = dispatch::dispatch(engine, dispatch::OP_ALLOCATE_MEMORY, &alloc);
+    let r = dispatch::dispatch(
+        engine,
+        dispatch::OP_ALLOCATE_MEMORY,
+        &dispatch::payload_allocate_memory(frame_size, 1),
+    );
     if r.status != VK_SUCCESS {
         eprintln!("[-] allocate memory failed: {}", r.detail);
         return 1;
     }
     let memory_handle = r.handles[0];
 
-    let mut bind = Vec::new();
-    bind.extend_from_slice(&buffer_handle.to_le_bytes());
-    bind.extend_from_slice(&memory_handle.to_le_bytes());
-    let r = dispatch::dispatch(engine, dispatch::OP_BIND_RENDER_BUFFER, &bind);
+    let r = dispatch::dispatch(
+        engine,
+        dispatch::OP_BIND_RENDER_BUFFER,
+        &dispatch::payload_bind_render_buffer(buffer_handle, memory_handle),
+    );
     if r.status != VK_SUCCESS {
         eprintln!("[-] bind render buffer failed: {}", r.detail);
         return 1;
     }
 
-    let mut frame = Vec::new();
-    frame.extend_from_slice(&width.to_le_bytes());
-    frame.extend_from_slice(&height.to_le_bytes());
-    let r = dispatch::dispatch(engine, dispatch::OP_RENDER_FRAME, &frame);
+    let r = dispatch::dispatch(
+        engine,
+        dispatch::OP_RENDER_FRAME,
+        &dispatch::payload_render_frame(width, height),
+    );
     if r.status != VK_SUCCESS {
         eprintln!("[-] render frame failed: {}", r.detail);
         return 1;
     }
     println!("[+] rendered compute frame {width}x{height} on host GPU");
 
-    let mut read = Vec::new();
-    read.extend_from_slice(&frame_size.to_le_bytes());
-    let r = dispatch::dispatch(engine, dispatch::OP_READ_PIXELS, &read);
+    let r = dispatch::dispatch(
+        engine,
+        dispatch::OP_READ_PIXELS,
+        &dispatch::payload_read_pixels(frame_size),
+    );
     if r.status != VK_SUCCESS || r.data.len() != frame_size as usize {
         eprintln!("[-] read pixels failed: {} ({} bytes)", r.detail, r.data.len());
         return 1;
@@ -319,7 +310,6 @@ fn render_to_file(engine: &HostVulkanEngine, width: u32, height: u32, out_path: 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let serve_mode = args.iter().any(|a| a == "--serve");
-    let aperture = args.iter().any(|a| a == "--aperture");
     let selftest_mode = args.iter().any(|a| a == "--selftest");
 
     println!("============================================================");
@@ -395,28 +385,7 @@ fn main() {
     let running = Arc::new(AtomicBool::new(true));
     ctrl::install(Arc::clone(&running));
 
-    // 4. Legacy shared-memory aperture emulation block (16 MB in-process simulation)
-    let mut memory_block = vec![0u8; 16 * 1024 * 1024];
-    let base_ptr = memory_block.as_mut_ptr();
-    let mem_len = memory_block.len();
-
-    unsafe {
-        if let Some(consumer) = ShmApertureConsumer::new(base_ptr, mem_len) {
-            println!("[+] Native Shared Memory DMA Aperture Initialized: 16 MB Buffer");
-            println!("    Ring Capacity : {} bytes", consumer.capacity);
-            let running2 = Arc::clone(&running);
-            let engine2 = Arc::clone(&engine);
-            if aperture {
-                thread::spawn(move || aperture_loop(consumer, engine2, running2));
-            } else {
-                drop(consumer);
-            }
-        } else {
-            println!("[-] Aperture init failed (buffer too small)");
-        }
-    }
-
-    // 5. Serve the Vulkan passthrough IPC protocol
+    // 4. Serve the Vulkan passthrough IPC protocol
     if serve_mode {
         let running_tcp = Arc::clone(&running);
         let engine_tcp = Arc::clone(&engine);
