@@ -178,6 +178,34 @@ body, html, #root {
   font-size: 15px;
 }
 
+.btn-sm {
+  padding: 5px 10px;
+  font-size: 11px;
+}
+
+.btn-active {
+  background-color: var(--accent-primary) !important;
+  color: #ffffff !important;
+  border-color: var(--accent-primary) !important;
+}
+
+.color-control-group {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background-color: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  padding: 2px 6px;
+}
+
+.color-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin-right: 2px;
+}
+
 /* Main Viewport Workspace */
 .main-viewport {
   display: flex;
@@ -195,6 +223,7 @@ body, html, #root {
   align-items: center;
   justify-content: center;
   overflow: hidden;
+  touch-action: none;
 }
 
 .vnc-canvas-container {
@@ -203,7 +232,8 @@ body, html, #root {
   display: flex;
   align-items: center;
   justify-content: center;
-  cursor: default;
+  cursor: crosshair;
+  touch-action: none;
 }
 
 .vnc-canvas-container canvas {
@@ -218,9 +248,46 @@ body, html, #root {
   transition: filter 0.15s ease;
 }
 
-/* Zero-cost GPU hardware color matrix (swaps BGR to RGB) */
-.color-fix-active .vnc-canvas-container canvas {
-  filter: url(#bgr-to-rgb);
+/* Zero-cost GPU hardware color matrix options */
+.color-mode-direct .vnc-canvas-container canvas {
+  filter: none;
+}
+
+.color-mode-bgr .vnc-canvas-container canvas {
+  filter: url(#bgr-swap);
+}
+
+.color-mode-brg .vnc-canvas-container canvas {
+  filter: url(#brg-swap);
+}
+
+.color-mode-gbr .vnc-canvas-container canvas {
+  filter: url(#gbr-swap);
+}
+
+.color-mode-fix_rby .vnc-canvas-container canvas {
+  filter: url(#fix-rby-swap);
+}
+
+/* Touch feedback ripple */
+.touch-ripple {
+  position: fixed;
+  width: 24px;
+  height: 24px;
+  margin-left: -12px;
+  margin-top: -12px;
+  border-radius: 50%;
+  background-color: rgba(59, 130, 246, 0.4);
+  border: 2px solid rgba(255, 255, 255, 0.8);
+  pointer-events: none;
+  z-index: 100;
+  transform: scale(1);
+  animation: pulse 0.8s infinite alternate;
+}
+
+@keyframes pulse {
+  0% { transform: scale(0.85); opacity: 0.8; }
+  100% { transform: scale(1.15); opacity: 0.4; }
 }
 
 /* Screen Placeholder Overlay */

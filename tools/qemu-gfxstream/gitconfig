@@ -1,0 +1,4 @@
+[http]
+	sslBackend = openssl
+[http "https://gitlab.com"]
+	sslBackend = openssl

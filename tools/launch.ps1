@@ -1,171 +1,187 @@
-﻿<#
+<#
 .SYNOPSIS
     Launches the Android 16 ARM64 Cuttlefish emulator on Windows 11 ARM64 (Snapdragon X Elite).
 
 .DESCRIPTION
-    Runs QEMU with WHPX hypervisor acceleration, native virtio devices, and SDL graphical display.
+    Single owner of the QEMU invocation (Build-QemuArgs). All other former
+    launch scripts (run_vm.bat, launch-detached.bat, boot-gfxstream-vm.ps1,
+    launch.sh, launch_hcs_vulkan.ps1) were divergent copies of this command
+    line and have been deleted; this file is canonical.
 
 .PARAMETER DisplayMode
-    Display backend for QEMU. Default is 'sdl'. Set to 'none' for headless background/ADB execution.
+    none | scrcpy | headless  -> headless (GUI default; pairs with scrcpy)
+    embedded | vnc            -> VNC on 127.0.0.1:5901 (websocket enabled)
+    gtk | sdl                 -> native window
+    Default: scrcpy (=none).
 
-.PARAMETER Memory
-    Guest RAM allocation. Default is '6G'.
+.PARAMETER GpuMode
+    gfxstream -> virtio-gpu-rutabaga-pci,gfxstream-vulkan=on (default; needs
+                 the repo-local custom QEMU and a host Vulkan driver with
+                 VK_KHR_external_memory_win32 to fully accelerate - falls
+                 back to SwiftShader in-guest until Qualcomm ships it).
+    basic     -> plain virtio-gpu-pci (works on any QEMU incl. msys2 stock).
 
-.PARAMETER Cores
-    Number of virtual CPU cores. Default is 6 (the guest renders UI with
-    SwiftShader in software, which scales with vCPUs; the old default of 4
-    made the scrcpy UI stream CPU-bound at ~11 FPS).
+.PARAMETER Memory / Cores
+    Guest RAM (default 6G) and vCPU count (default 6).
 
 .PARAMETER QemuPath
-    Path to the aarch64 QEMU binary. Default is 'C:\msys64\clangarm64\bin\qemu-system-aarch64.exe'.
+    Defaults to the repo-local custom build. For 'basic' GPU mode you may
+    point at C:\msys64\clangarm64\bin\qemu-system-aarch64.exe instead.
 
-.PARAMETER Headless
-    Switch to run in headless mode (equivalent to -DisplayMode 'none').
-
-.EXAMPLE
-    .\tools\launch.ps1
-    Launches the emulator with native SDL GUI window.
-
-.EXAMPLE
-    .\tools\launch.ps1 -Headless
-    Launches the emulator in headless mode for background ADB debugging.
+.PARAMETER PrintArgs
+    Print the resolved QEMU argv (one argument per line) and exit without
+    starting the VM. Use for diffing configuration changes safely.
 #>
 
 [CmdletBinding()]
 param(
     [string]$DisplayMode = "scrcpy",
+    [string]$GpuMode = "gfxstream",
     [string]$Memory = "6G",
     [int]$Cores = 6,
-    [string]$QemuPath = "C:\msys64\clangarm64\bin\qemu-system-aarch64.exe",
-    [switch]$Headless
+    [string]$QemuPath = "",
+    [switch]$Headless,
+    [switch]$PrintArgs
 )
 
-$ErrorActionPreference = "Stop"
+# ------------------------------------------------------------------ PATH ----
+# The custom QEMU links against MSYS2 runtime DLLs (glib-2.0-0.dll, pixman,
+# pcre2, zstd, ...) living in C:\msys64\clangarm64\bin, plus the gfxstream
+# backend DLLs. None of these are on a default user/system PATH, so a GUI
+# spawn gets STATUS_DLL_NOT_FOUND (0xC0000135) and QEMU dies sub-second with
+# no output. Bootstrap PATH here so launch works from ANY environment.
+$RepoRoot = (Resolve-Path "$PSScriptRoot\..").Path
+$GfxDir   = Join-Path $RepoRoot "tools\qemu-gfxstream"
+if (-not $QemuPath) { $QemuPath = Join-Path $GfxDir "qemu\build\qemu-system-aarch64.exe" }
 
-if ($Headless) {
-    $DisplayMode = "none"
+$pathAdditions = @("C:\msys64\clangarm64\bin")
+if ($GpuMode -eq "gfxstream") {
+    $pathAdditions += @(
+        (Join-Path $GfxDir "gfxstream\build-host"),
+        (Join-Path $GfxDir "gfxstream\build-host\host")
+    )
+}
+foreach ($p in $pathAdditions) {
+    if ((Test-Path $p) -and ($env:PATH -notlike "*$p*")) { $env:PATH = "$p;$env:PATH" }
 }
 
-$RepoRoot = (Resolve-Path "$PSScriptRoot\..").Path
-$ImgDir   = Join-Path $RepoRoot "aosp_cf_arm64_only_phone-img"
-$M0Dir    = Join-Path $ImgDir "work\m0"
+# Native Qualcomm Vulkan driver (updated 2026-08: branch pp165, v0.863.0).
+# Falls through silently if the DriverStore hash ever changes again.
+$NewIcd = 'C:\Windows\System32\DriverStore\FileRepository\qcdx8380.inf_arm64_97b66cecb1490986\qcvk_icd_arm64x.json'
+if (Test-Path $NewIcd) { $env:VK_DRIVER_FILES = $NewIcd }
 
+# ------------------------------------------------------------- display ----- #
+$ErrorActionPreference = "Continue"   # never Stop: PS5.1 + native stderr = instant death
+if ($Headless) { $DisplayMode = "none" }
+
+$ImgDir    = Join-Path $RepoRoot "aosp_cf_arm64_only_phone-img"
+$M0Dir     = Join-Path $ImgDir "work\m0"
 $KernelPath = Join-Path $ImgDir "out\kernel"
 $InitrdPath = Join-Path $M0Dir "initrd.img"
 $DiskPath   = Join-Path $M0Dir "disk.raw"
-$LogcatPath = Join-Path $RepoRoot "logcat_serial.log"
 $SerialLog  = Join-Path $M0Dir "serial.log"
 
-# Pre-flight validation
-if (-not (Test-Path $QemuPath)) {
-    Write-Error "QEMU executable not found at: $QemuPath`nPlease ensure clangarm64 QEMU is installed."
-}
-if (-not (Test-Path $KernelPath)) {
-    Write-Error "Kernel image not found at: $KernelPath"
-}
-if (-not (Test-Path $InitrdPath)) {
-    Write-Error "Initrd image not found at: $InitrdPath`nRun 'python tools/m0_build.py initrd' first."
-}
-if (-not (Test-Path $DiskPath)) {
-    Write-Error "Disk raw image not found at: $DiskPath`nRun 'python tools/m0_build.py disk' first."
+# ------------------------------------------------------------ preflight ---- #
+if    (-not (Test-Path $QemuPath))  { Write-Error "QEMU not found: $QemuPath" }
+if    (-not (Test-Path $KernelPath)) { Write-Error "Kernel image not found: $KernelPath" }
+if    (-not (Test-Path $InitrdPath)) { Write-Error "Initrd not found: $InitrdPath (run: python tools/m0_build.py initrd)" }
+if    (-not (Test-Path $DiskPath))   { Write-Error "Disk not found: $DiskPath (run: python tools/m0_build.py disk)" }
+
+# ------------------------------------------------------- Build-QemuArgs ---- #
+# THE single source of the QEMU command line. Returns string[] argv.
+function Build-QemuArgs {
+    [CmdletBinding()]
+    param(
+        [string]$DisplayMode, [string]$GpuMode, [string]$Memory,
+        [int]$Cores, [string]$Kernel, [string]$Initrd, [string]$Disk,
+        [string]$SerialLog
+    )
+
+    # Kernel cmdline (canonical - matches init_wrapper expectations:
+    # 4 UARTs, quiet console, binder rust impl, firmware from vendor/etc)
+    $append = "console=ttyAMA0 earlycon=pl011,0x9000000 quiet loglevel=0 " +
+              "printk.devkmsg=on audit=0 panic=-1 8250.nr_uarts=4 " +
+              "binder.impl=rust cma=0 firmware_class.path=/vendor/etc/ " +
+              "loop.max_part=7 init=/init bootconfig"
+
+    # Display backend + whether windowed input devices attach.
+    # Input note (verified via getevent, 2026-08): virtio-keyboard/tablet are
+    # broken in every frontend we tried (no QEMU handler / broken MT slots);
+    # USB HID (nec-usb-xhci + usb-kbd + usb-mouse) is the only working pair.
+    switch -Regex ($DisplayMode) {
+        '^(embedded|vnc)$' {
+            $display = @("-display", "vnc=127.0.0.1:0,websocket=5901,lossy=off,non-adaptive=on"); $windowed = $true }
+        '^gtk$'   { $display = @("-display", "gtk"); $windowed = $true }
+        '^sdl$'   { $display = @("-display", "sdl"); $windowed = $true }
+        '^(scrcpy|none|headless)$' {
+            $display = @("-display", "none"); $windowed = $false }
+        default   { $display = @("-display", $DisplayMode); $windowed = $true }
+    }
+
+    # GPU device
+    switch ($GpuMode) {
+        'basic' {
+            $gpu = @("-device", "virtio-gpu-pci,xres=1280,yres=800") }
+        default {   # gfxstream
+            $gpu = @("-device", "virtio-gpu-rutabaga-pci,addr=03.0,gfxstream-vulkan=on,xres=1280,yres=800") }
+    }
+
+    $inputDev = @()
+    if ($windowed) { $inputDev = @("-device","nec-usb-xhci","-device","usb-kbd","-device","usb-mouse") }
+
+    # virtio consoles hvc0..15 - init_wrapper.c mknods /dev/hvc0..15 and
+    # PROJECT_REPORT.md documents HAL crash-loops when these are absent.
+    $hvc = @()
+    for ($n = 0; $n -lt 16; $n++) {
+        $hvc += @("-chardev", "null,id=hvc$n", "-device", "virtconsole,chardev=hvc$n")
+    }
+
+    # Assemble: machine/base -> storage -> net -> gpu -> consoles -> input ->
+    # display -> serial/monitor -> cmdline. Order groups mirror historical
+    # working invocations (see docs/history/BUILD_LOG.md).
+    return @(
+        "-accel", "whpx",
+        "-cpu", "host",
+        "-machine", "virt,gic-version=3,highmem=on",
+        "-m", $Memory,
+        "-smp", "$Cores,sockets=1,cores=$Cores,threads=1",
+        "-object", "iothread,id=iothread0",
+        "-kernel", $Kernel,
+        "-initrd", $Initrd,
+        "-drive", "file=$Disk,format=raw,if=none,id=disk,cache=writeback,aio=threads",
+        "-device", "virtio-blk-pci,drive=disk,addr=01.0,iothread=iothread0,num-queues=4",
+        "-netdev", "user,id=net0,hostfwd=tcp:127.0.0.1:5555-10.0.2.15:5555,hostfwd=tcp:127.0.0.1:6666-10.0.2.15:6666",
+        "-device", "virtio-net-pci,netdev=net0,addr=02.0"
+    ) + $gpu + @(
+        "-device", "virtio-serial-pci,addr=04.0,max_ports=16"
+    ) + $hvc + $inputDev + $display + @(
+        "-chardev", "file,id=char0,path=$SerialLog",
+        "-serial", "chardev:char0",
+        "-serial", "null", "-serial", "null", "-serial", "null",
+        "-monitor", "none",
+        "-no-reboot",
+        "-append", $append
+    )
 }
 
-# Clean up any stale QEMU instances or port forwards first to release file locks and prevent hostfwd port collisions
-Get-Process -Name "qemu-system-aarch64", "scrcpy" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-try {
-    & "C:\platform-tools\adb.exe" forward --remove-all 2>&1 | Out-Null
-} catch {}
+$QemuArgs = Build-QemuArgs -DisplayMode $DisplayMode -GpuMode $GpuMode `
+    -Memory $Memory -Cores $Cores -Kernel $KernelPath -Initrd $InitrdPath `
+    -Disk $DiskPath -SerialLog $SerialLog
+
+if ($PrintArgs) {
+    Write-Output "--qemu-path--"; Write-Output $QemuPath
+    Write-Output "--args--";      $QemuArgs | ForEach-Object { $_ }
+    return
+}
+
+# --------------------------------------------------------- stale process --- #
+Get-Process -Name "qemu-system-aarch64", "scrcpy" -ErrorAction SilentlyContinue |
+    Stop-Process -Force -ErrorAction SilentlyContinue
+try { & "C:\platform-tools\adb.exe" forward --remove-all 2>&1 | Out-Null } catch {}
 Start-Sleep -Milliseconds 500
+if (-not (Test-Path $M0Dir)) { New-Item -ItemType Directory -Path $M0Dir -Force | Out-Null }
 
-# Ensure serial log directory exists and reset serial log
-if (-not (Test-Path $M0Dir)) {
-    New-Item -ItemType Directory -Path $M0Dir -Force | Out-Null
-}
-$AppendCmdline = "console=ttyAMA0 earlycon=pl011,0x9000000 quiet loglevel=0 printk.devkmsg=on audit=0 panic=-1 8250.nr_uarts=4 binder.impl=rust cma=0 firmware_class.path=/vendor/etc/ loop.max_part=7 init=/init bootconfig"
-
-$DisplayArgs = @()
-$InputArgs = @()
-
-# Input attach note (2026-08): virtio-keyboard-pci DID NOT register a QEMU
-# input handler in the msys2 clangarm64 QEMU 11 build â€” keys died in QEMU.
-# ALSO the virtio-tablet receives BROKEN multitouch slot events from the
-# window frontend ("qemu: warning: Unexpected touch slot number: N >= 10")
-# which QEMU drops â€” so clicks/moves from the window do nothing. Both are
-# fixed by using USB HID devices (nec-usb-xhci + usb-kbd + usb-tablet):
-# proper handlers, plain ABS/key events, verified end-to-end via getevent.
-
-if ($DisplayMode -eq "embedded" -or $DisplayMode -eq "vnc") {
-    $DisplayArgs = @("-display", "vnc=127.0.0.1:0,websocket=5901,lossy=off,non-adaptive=on")
-    $GpuDevice   = @("-device", "virtio-gpu-rutabaga-pci,addr=03.0,gfxstream-vulkan=on,xres=1280,yres=800")
-    $InputArgs   = @("-device", "nec-usb-xhci", "-device", "usb-kbd", "-device", "usb-mouse")
-} elseif ($DisplayMode -eq "gtk") {
-    $DisplayArgs = @("-display", "gtk")
-    $GpuDevice   = @("-device", "virtio-gpu-rutabaga-pci,addr=03.0,gfxstream-vulkan=on,xres=1280,yres=800")
-    $InputArgs   = @("-device", "nec-usb-xhci", "-device", "usb-kbd", "-device", "usb-mouse")
-} elseif ($DisplayMode -eq "sdl") {
-    $DisplayArgs = @("-display", "sdl")
-    $GpuDevice   = @("-device", "virtio-gpu-rutabaga-pci,addr=03.0,gfxstream-vulkan=on,xres=1280,yres=800")
-    $InputArgs   = @("-device", "nec-usb-xhci", "-device", "usb-kbd", "-device", "usb-mouse")
-} elseif ($DisplayMode -eq "scrcpy" -or $DisplayMode -eq "none" -or $DisplayMode -eq "headless") {
-    $DisplayArgs = @("-display", "none")
-    $GpuDevice   = @("-device", "virtio-gpu-rutabaga-pci,addr=03.0,gfxstream-vulkan=on,xres=1280,yres=800")
-    $InputArgs   = @()
-} else {
-    $DisplayArgs = @("-display", $DisplayMode)
-    $GpuDevice   = @("-device", "virtio-gpu-rutabaga-pci,addr=03.0,gfxstream-vulkan=on,xres=1280,yres=800")
-    $InputArgs   = @("-device", "nec-usb-xhci", "-device", "usb-kbd", "-device", "usb-mouse")
-}
-
-$QemuArgs = @(
-    "-accel", "whpx",
-    "-cpu", "host",
-    "-machine", "virt,gic-version=3,highmem=on",
-    "-m", $Memory,
-    "-smp", "$Cores,sockets=1,cores=$Cores,threads=1",
-    "-object", "iothread,id=iothread0",
-    "-kernel", $KernelPath,
-    "-initrd", $InitrdPath,
-    "-drive", "file=$DiskPath,format=raw,if=none,id=disk,cache=writeback,aio=threads",
-    "-device", "virtio-blk-pci,drive=disk,addr=01.0,iothread=iothread0,num-queues=4",
-    "-netdev", "user,id=net0,hostfwd=tcp:127.0.0.1:5555-10.0.2.15:5555,hostfwd=tcp:127.0.0.1:6666-10.0.2.15:6666",
-    "-device", "virtio-net-pci,netdev=net0,addr=02.0"
-) + $GpuDevice + @(
-    "-device", "virtio-serial-pci,addr=04.0,max_ports=16",
-    "-chardev", "null,id=hvc0", "-device", "virtconsole,chardev=hvc0",
-    "-chardev", "null,id=hvc1", "-device", "virtconsole,chardev=hvc1",
-    "-chardev", "null,id=hvc2", "-device", "virtconsole,chardev=hvc2",
-    "-chardev", "null,id=hvc3", "-device", "virtconsole,chardev=hvc3",
-    "-chardev", "null,id=hvc4", "-device", "virtconsole,chardev=hvc4",
-    "-chardev", "null,id=hvc5", "-device", "virtconsole,chardev=hvc5",
-    "-chardev", "null,id=hvc6", "-device", "virtconsole,chardev=hvc6",
-    "-chardev", "null,id=hvc7", "-device", "virtconsole,chardev=hvc7",
-    "-chardev", "null,id=hvc8", "-device", "virtconsole,chardev=hvc8",
-    "-chardev", "null,id=hvc9", "-device", "virtconsole,chardev=hvc9",
-    "-chardev", "null,id=hvc10", "-device", "virtconsole,chardev=hvc10",
-    "-chardev", "null,id=hvc11", "-device", "virtconsole,chardev=hvc11",
-    "-chardev", "null,id=hvc12", "-device", "virtconsole,chardev=hvc12",
-    "-chardev", "null,id=hvc13", "-device", "virtconsole,chardev=hvc13",
-    "-chardev", "null,id=hvc14", "-device", "virtconsole,chardev=hvc14",
-    "-chardev", "null,id=hvc15", "-device", "virtconsole,chardev=hvc15"
-) + $InputArgs + $DisplayArgs + @(
-    "-chardev", "file,id=char0,path=$SerialLog",
-    "-serial", "chardev:char0",
-    "-serial", "null",
-    "-serial", "null",
-    "-serial", "null",
-    "-monitor", "none",
-    "-no-reboot",
-    "-append", $AppendCmdline
-)
-
-Write-Host "==========================================================" -ForegroundColor Cyan
-Write-Host " Starting Android 16 ARM64 Emulator (QEMU + WHPX)" -ForegroundColor Green
-Write-Host " Display Mode : $DisplayMode" -ForegroundColor Yellow
-Write-Host " RAM / vCPUs  : $Memory / $Cores cores" -ForegroundColor Yellow
-Write-Host " ADB Target   : 127.0.0.1:5555" -ForegroundColor Yellow
-Write-Host "==========================================================" -ForegroundColor Cyan
-
-# Start a background watchdog to ensure all serial services are stopped and UI animations optimized upon boot
+# ------------------------------------------------------------- watchdog ---- #
 Start-Job -ScriptBlock {
     do {
         Start-Sleep -Seconds 2
@@ -174,5 +190,11 @@ Start-Job -ScriptBlock {
     & "C:\platform-tools\adb.exe" -s 127.0.0.1:5555 shell "setprop ctl.stop seriallogging; setprop ctl.stop console; dmesg -n 1; wm size 1280x800; settings put global window_animation_scale 0.5; settings put global transition_animation_scale 0.5; settings put global animator_duration_scale 0.5" 2>$null
 } | Out-Null
 
-& $QemuPath $QemuArgs
+Write-Host "==========================================================" -ForegroundColor Cyan
+Write-Host " Starting Android 16 ARM64 Emulator (QEMU + WHPX)" -ForegroundColor Green
+Write-Host " Display Mode : $DisplayMode    GPU Mode : $GpuMode" -ForegroundColor Yellow
+Write-Host " RAM / vCPUs  : $Memory / $Cores cores" -ForegroundColor Yellow
+Write-Host " ADB Target   : 127.0.0.1:5555" -ForegroundColor Yellow
+Write-Host "==========================================================" -ForegroundColor Cyan
 
+& $QemuPath $QemuArgs

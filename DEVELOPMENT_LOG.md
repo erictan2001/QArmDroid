@@ -128,3 +128,21 @@ adb connect 127.0.0.1:5555
 adb shell input tap 640 400
 adb shell input swipe 500 600 500 200 300
 ```
+
+## Cleanup 2026-08-23 (Candidate 1 wrap-up)
+
+Deleted launch scripts were divergent copies of launch.ps1's QEMU line.
+Unique facts preserved here before deletion:
+- run_vm.bat / launch-detached.bat variants used `-smp 4/8` and `blob=on`
+  with no virtconsoles - both configs are superseded by launch.ps1's
+  canonical shape (smp param, hvc0-15 always wired).
+- boot-gfxstream-vm.ps1 duplicated gfxstream flags; see BUILD_STATUS.md.
+- launch.sh was the v0 bash harness using broken virtio-keyboard/mouse
+  (see Key Findings #1-2); superseded by USB HID input.
+- gen_rust.py was a codegen existence-checker; cargo build subsumes it.
+- Root cause of "launch.ps1 fails to boot" (fixed this session): custom QEMU
+  links MSYS2 runtime DLLs from C:\msys64\clangarm64\bin which are absent
+  from GUI/user PATH -> STATUS_DLL_NOT_FOUND (0xC0000135) sub-second death,
+  zero stderr. Fix: PATH bootstrap at top of launch.ps1. Secondary hardening:
+  $ErrorActionPreference must stay Continue (PS5.1 + native stderr banner =
+  terminating NativeCommandError under Stop).

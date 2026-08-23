@@ -1,9 +1,9 @@
 use std::io::Write;
 use std::net::{SocketAddr, TcpStream};
 use std::path::PathBuf;
-use std::process::Command;
+use std::process::{Child, Command};
 use std::sync::mpsc::{channel, Sender};
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 use std::thread;
 use std::time::Duration;
 use serde::Serialize;
@@ -13,6 +13,8 @@ struct EmulatorStatus {
     running: bool,
     vnc_ready: bool,
     adb_ready: bool,
+    boot_completed: bool,
+    scrcpy_running: bool,
 }
 
 // Asynchronous non-blocking background touch worker.
@@ -26,6 +28,8 @@ fn get_touch_sender() -> &'static Sender<[u8; 14]> {
         thread::spawn(move || {
             let addr: SocketAddr = "127.0.0.1:6666".parse().unwrap();
             let mut stream: Option<TcpStream> = None;
+            let mut last_down: Option<(u16, u16)> = None;
+            let mut last_move: Option<(u16, u16)> = None;
 
             while let Ok(packet) = rx.recv() {
                 let mut sent = false;
@@ -73,6 +77,35 @@ fn get_touch_sender() -> &'static Sender<[u8; 14]> {
                             let _ = Command::new("adb")
                                 .args(&["-s", "127.0.0.1:5555", "shell", "input", "tap", &x1.to_string(), &y1.to_string()])
                                 .output();
+                        }
+                        2 => {
+                            last_down = Some((x1, y1));
+                            last_move = None;
+                        }
+                        3 => {
+                            last_move = Some((x1, y1));
+                        }
+                        4 => {
+                            if let Some((dx, dy)) = last_down {
+                                if let Some((mx, my)) = last_move {
+                                    let dist = ((mx as i32 - dx as i32).abs() + (my as i32 - dy as i32).abs()) as u32;
+                                    if dist > 15 {
+                                        let _ = Command::new("adb")
+                                            .args(&["-s", "127.0.0.1:5555", "shell", "input", "swipe", &dx.to_string(), &dy.to_string(), &mx.to_string(), &my.to_string(), "150"])
+                                            .output();
+                                    } else {
+                                        let _ = Command::new("adb")
+                                            .args(&["-s", "127.0.0.1:5555", "shell", "input", "tap", &dx.to_string(), &dy.to_string()])
+                                            .output();
+                                    }
+                                } else {
+                                    let _ = Command::new("adb")
+                                        .args(&["-s", "127.0.0.1:5555", "shell", "input", "tap", &dx.to_string(), &dy.to_string()])
+                                        .output();
+                                }
+                            }
+                            last_down = None;
+                            last_move = None;
                         }
                         5 => {
                             let _ = Command::new("adb")
@@ -154,7 +187,13 @@ fn start_emulator(display_mode: Option<String>) -> Result<String, String> {
 
     let repo_root = find_repo_root()?;
     let launch_script = repo_root.join("tools").join("launch.ps1");
-    let mode = display_mode.unwrap_or_else(|| "embedded".to_string());
+    let mode = display_mode.unwrap_or_else(|| "scrcpy".to_string());
+    let qemu_mode = match mode.as_str() {
+        "scrcpy" => "none",
+        "embedded" => "embedded",
+        "sdl" => "sdl",
+        other => other,
+    };
 
     let script_str = launch_script
         .to_str()
@@ -169,7 +208,7 @@ fn start_emulator(display_mode: Option<String>) -> Result<String, String> {
             "-File",
             script_str,
             "-DisplayMode",
-            &mode,
+            qemu_mode,
         ])
         .spawn()
     {
@@ -178,8 +217,65 @@ fn start_emulator(display_mode: Option<String>) -> Result<String, String> {
     }
 }
 
+static SCRCPY_PROCESS: Mutex<Option<Child>> = Mutex::new(None);
+
+#[tauri::command]
+fn launch_scrcpy() -> Result<String, String> {
+    let repo_root = find_repo_root()?;
+    let scrcpy_exe = repo_root.join("tools").join("scrcpy").join("scrcpy.exe");
+    if !scrcpy_exe.exists() {
+        return Err(format!("scrcpy.exe not found at {:?}", scrcpy_exe));
+    }
+
+    let mut lock = SCRCPY_PROCESS.lock().unwrap();
+    if let Some(ref mut child) = *lock {
+        if let Ok(None) = child.try_wait() {
+            return Ok("scrcpy is already running".to_string());
+        }
+    }
+
+    let scrcpy_dir = repo_root.join("tools").join("scrcpy");
+    let scrcpy_server = scrcpy_dir.join("scrcpy-server");
+
+    // Ensure adb connection is established
+    let _ = Command::new("adb").args(&["connect", "127.0.0.1:5555"]).output();
+
+    let child = Command::new(&scrcpy_exe)
+        .current_dir(&scrcpy_dir)
+        .env("SCRCPY_SERVER_PATH", &scrcpy_server)
+        .args(&[
+            "-s", "127.0.0.1:5555",
+            "--window-title=Arm64 Android 16 Emulator",
+            "--max-fps=60",
+            "--stay-awake",
+            "--power-off-on-close",
+            "--no-audio",
+        ])
+        .spawn()
+        .map_err(|e| format!("Failed to spawn scrcpy: {}", e))?;
+
+    *lock = Some(child);
+    Ok("scrcpy launched successfully".to_string())
+}
+
+#[tauri::command]
+fn stop_scrcpy() -> Result<String, String> {
+    let mut lock = SCRCPY_PROCESS.lock().unwrap();
+    if let Some(ref mut child) = *lock {
+        let _ = child.kill();
+        *lock = None;
+    }
+    let _ = Command::new("taskkill")
+        .args(&["/F", "/IM", "scrcpy.exe"])
+        .output();
+
+    Ok("scrcpy stopped".to_string())
+}
+
 #[tauri::command]
 fn stop_emulator() -> Result<String, String> {
+    let _ = stop_scrcpy();
+
     // Kill QEMU process on Windows
     let _ = Command::new("taskkill")
         .args(&["/F", "/IM", "qemu-system-aarch64.exe"])
@@ -195,15 +291,52 @@ fn is_port_open(port: u16, timeout_ms: u64) -> bool {
 
 #[tauri::command]
 fn get_emulator_status() -> EmulatorStatus {
-    let vnc_ready = is_port_open(5901, 40);
-    let adb_ready = is_port_open(5555, 40);
-    let daemon_ready = is_port_open(6666, 40);
-    let running = vnc_ready || adb_ready || daemon_ready;
+    let vnc_ready = is_port_open(5901, 30);
+    let port_5555 = is_port_open(5555, 30);
+    let daemon_ready = is_port_open(6666, 30);
+    let running = vnc_ready || port_5555 || daemon_ready;
+
+    let mut adb_ready = false;
+    let mut boot_completed = false;
+
+    if port_5555 {
+        if let Ok(output) = Command::new("adb")
+            .args(&["-s", "127.0.0.1:5555", "get-state"])
+            .output()
+        {
+            let s = String::from_utf8_lossy(&output.stdout);
+            if s.contains("device") {
+                adb_ready = true;
+                if let Ok(b_out) = Command::new("adb")
+                    .args(&["-s", "127.0.0.1:5555", "shell", "getprop", "sys.boot_completed"])
+                    .output()
+                {
+                    let b = String::from_utf8_lossy(&b_out.stdout);
+                    if b.trim() == "1" {
+                        boot_completed = true;
+                    }
+                }
+            }
+        }
+    }
+
+    let mut scrcpy_running = false;
+    if let Ok(mut lock) = SCRCPY_PROCESS.lock() {
+        if let Some(ref mut child) = *lock {
+            if let Ok(None) = child.try_wait() {
+                scrcpy_running = true;
+            } else {
+                *lock = None;
+            }
+        }
+    }
 
     EmulatorStatus {
         running,
         vnc_ready,
         adb_ready,
+        boot_completed,
+        scrcpy_running,
     }
 }
 
@@ -328,6 +461,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             start_emulator,
             stop_emulator,
+            launch_scrcpy,
+            stop_scrcpy,
             get_emulator_status,
             send_adb_key,
             send_adb_text,

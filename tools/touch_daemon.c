@@ -1,4 +1,4 @@
-﻿/* touch_daemon.c — zero-latency native touch input for ARM64 Android QEMU guest
+/* touch_daemon.c — zero-latency native touch input for ARM64 Android QEMU guest
  * No libc, no headers — uses raw aarch64 syscalls like init_wrapper.c.
  * Listens on TCP port 6666, writes directly to /dev/input/event1 (virtio-tablet).
  * Multi-client concurrency via fork (clone) per connection.
@@ -98,7 +98,7 @@ struct input_event {
 };
 
 /* ---- helpers ---- */
-static void *memset(void *s, int c, unsigned long n) {
+void *memset(void *s, int c, unsigned long n) {
     u8 *p = s; while (n--) *p++ = (u8)c; return s;
 }
 static int strstr_simple(const char *h, const char *needle) {
@@ -187,16 +187,22 @@ static void find_device(void) {
             char name[128];
             memset(name, 0, 128);
             sys3(SYS_ioctl, fd, EVIOCGNAME_128, (long)name);
-            if (strstr_simple(name, "Tablet") || strstr_simple(name, "Touch")) {
+            if (strstr_simple(name, "Tablet") || strstr_simple(name, "tablet") || 
+                strstr_simple(name, "Touch")  || strstr_simple(name, "touch")  || 
+                strstr_simple(name, "Virtio") || strstr_simple(name, "virtio")) {
                 evfd = fd;
                 return;
             }
             sys1(SYS_close, fd);
         }
     }
-    /* fallback */
+    /* fallback to event1 or event0 */
     path[16] = '1';
     evfd = (int)sys4(SYS_openat, AT_FDCWD, (long)path, O_RDWR, 0);
+    if (evfd < 0) {
+        path[16] = '0';
+        evfd = (int)sys4(SYS_openat, AT_FDCWD, (long)path, O_RDWR, 0);
+    }
 }
 
 void _start(void) {
