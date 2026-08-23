@@ -54,3 +54,13 @@ Parameters: `-DisplayMode none|scrcpy|embedded|vnc|gtk|sdl`,
 - Custom QEMU/gfxstream build environment: `tools/qemu-gfxstream/`
   (see its BUILD_STATUS.md for why gfxstream is platform-blocked).
 
+
+## Known follow-ups (deferred by design)
+
+- **Topology constants** (ports 5555/6520/6666, 1280x800, slirp IPs) still
+  live as literals across launch.ps1 / src-tauri / m0_build.py. Candidate:
+  emit `topology.json` from m0_build.py and read it in both consumers.
+  Deferred until a second real consumer of the values appears.
+- scrcpy stream flags are canonical in `src-tauri/src/lib.rs`; the removed
+  `start_scrcpy.ps1` duplicate may be re-created only if it reads those
+  consts rather than re-hardcoding them.

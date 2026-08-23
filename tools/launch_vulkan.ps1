@@ -27,8 +27,6 @@
 .PARAMETER NoRenderTest
     Skip the guest render verification stage.
 
-.PARAMETER NoScrcpy
-    Do not auto-attach scrcpy after boot.
 
 .EXAMPLE
     .\tools\launch_vulkan.ps1
@@ -40,8 +38,7 @@ param(
     [string]$DisplayMode = "scrcpy",
     [string]$Memory = "6G",
     [int]$Cores = 6,
-    [switch]$NoRenderTest,
-    [switch]$NoScrcpy
+    [switch]$NoRenderTest
 )
 
 # PS 5.1 treats ANY native-command stderr as a terminating error under
@@ -122,9 +119,11 @@ if ($booted -and -not $NoRenderTest) {
     }
 }
 
-if ($booted -and -not $NoScrcpy -and $DisplayMode -eq "scrcpy") {
-    Write-Host "[*] Attaching scrcpy display mirror..." -ForegroundColor Yellow
-    & powershell -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "start_scrcpy.ps1")
+if ($booted -and $DisplayMode -eq "scrcpy") {
+    # scrcpy auto-attach was removed: canonical stream config (30fps/960p/2M)
+    # now lives in src-tauri/src/lib.rs; attach via the GUI Launch button or:
+    #   tools\scrcpy\scrcpy.exe -s 127.0.0.1:5555 --max-fps=30 -m 960 -b 2M --no-audio
+    Write-Host "[*] scrcpy not auto-attached (GUI Launch button attaches with tuned config)" -ForegroundColor Yellow
 }
 
 Write-Host "==========================================================" -ForegroundColor Cyan

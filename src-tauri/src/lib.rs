@@ -240,13 +240,21 @@ fn launch_scrcpy() -> Result<String, String> {
     // Ensure adb connection is established
     let _ = Command::new("adb").args(&["connect", "127.0.0.1:5555"]).output();
 
+    // Canonical scrcpy stream config — measured optimum (PERFORMANCE.md):
+    // the guest's software H264 encoder saturates around 11-13 fps at
+    // 60fps/4M; capping to 30fps/960p/2M keeps the stream stable instead of
+    // bursty, which reads as smoother. Do not raise silently.
     let child = Command::new(&scrcpy_exe)
         .current_dir(&scrcpy_dir)
         .env("SCRCPY_SERVER_PATH", &scrcpy_server)
         .args(&[
             "-s", "127.0.0.1:5555",
             "--window-title=Arm64 Android 16 Emulator",
-            "--max-fps=60",
+            "--max-fps=30",
+            "-m", "960",
+            "-b", "2M",
+            "--video-codec=h264",
+            "--render-driver=direct3d11",
             "--stay-awake",
             "--power-off-on-close",
             "--no-audio",
