@@ -44,3 +44,6 @@ Thumbs.db
 *.njsproj
 *.sln
 *.sw?
+
+# J-Space session ledger (local tooling state)
+.jspace/
