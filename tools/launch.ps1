@@ -182,7 +182,10 @@ function Build-QemuArgs {
     }
 
     $inputDev = @()
-    if ($windowed) { $inputDev = @("-device","nec-usb-xhci","-device","usb-kbd","-device","usb-mouse") }
+    if ($windowed) { $inputDev = @("-device","nec-usb-xhci","-device","usb-kbd","-device","usb-tablet") }
+
+    # Audio: virtio-sound (guest kernel has virtio_snd driver)
+    $audioDev = @("-device", "virtio-sound-pci")
 
     # virtio consoles hvc0..15 - init_wrapper.c mknods /dev/hvc0..15 and
     # PROJECT_REPORT.md documents HAL crash-loops when these are absent.
@@ -209,7 +212,7 @@ function Build-QemuArgs {
         "-device", "virtio-net-pci,netdev=net0,addr=02.0"
     ) + $gpu + @(
         "-device", "virtio-serial-pci,addr=04.0,max_ports=16"
-    ) + $hvc + $inputDev + $display + @(
+    ) + $hvc + $audioDev + $inputDev + $display + @(
         "-chardev", "file,id=char0,path=$SerialLog",
         "-serial", "chardev:char0",
         "-serial", "null",
