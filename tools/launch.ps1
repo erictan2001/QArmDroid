@@ -68,10 +68,18 @@ foreach ($p in $pathAdditions) {
     if ((Test-Path $p) -and ($env:PATH -notlike "*$p*")) { $env:PATH = "$p;$env:PATH" }
 }
 
-# Native Qualcomm Vulkan driver (updated 2026-08: branch pp165, v0.863.0).
-# Falls through silently if the DriverStore hash ever changes again.
-$NewIcd = 'C:\Windows\System32\DriverStore\FileRepository\qcdx8380.inf_arm64_97b66cecb1490986\qcvk_icd_arm64x.json'
-if (Test-Path $NewIcd) { $env:VK_DRIVER_FILES = $NewIcd }
+# --- GPU selection for gfxstream (CRITICAL) ---
+# ANDROID_EMU_VK_SELECT_GPU="1" selects GPU1 = Mesa Dozen (D3D12→Vulkan)
+# which has VK_KHR_external_memory_win32. GPU0 = native Adreno LACKS it.
+# MUST use integer index, NOT name substring ("Direct3D12" matches WARP too!)
+$env:ANDROID_EMU_VK_SELECT_GPU = "1"
+
+# Native Qualcomm Vulkan driver — DO NOT SET VK_DRIVER_FILES to only this ICD!
+# Setting it restricts Vulkan loader to ONLY native Adreno, hiding Mesa Dozen
+# (D3D12) device which HAS VK_KHR_external_memory_win32 needed for gfxstream.
+# Let the loader enumerate ALL ICDs so our scoring can pick Dozen.
+# $NewIcd = 'C:\Windows\System32\DriverStore\FileRepository\qcdx8380.inf_arm64_97b66cecb1490986\qcvk_icd_arm64x.json'
+# if (Test-Path $NewIcd) { $env:VK_DRIVER_FILES = $NewIcd }
 
 # ------------------------------------------------- binary/display resolver --
 # The repo-local custom QEMU was built --disable-gtk --disable-sdl
@@ -126,7 +134,15 @@ if ($Headless) { $DisplayMode = "none" }
 $ImgDir    = Join-Path $RepoRoot "aosp_cf_arm64_only_phone-img"
 $M0Dir     = Join-Path $ImgDir "work\m0"
 $KernelPath = Join-Path $ImgDir "out\kernel"
+# initrd selection by GPU mode:
+#  - basic / SwiftShader: use the ORIGINAL initrd.img (pastel/angle config)
+#  - gfxstream (ranchu):  use initrd_gpu.img (vulkan=ranchu passthrough config)
 $InitrdPath = Join-Path $M0Dir "initrd.img"
+if (-not (Test-Path $InitrdPath)) { Write-Error "Initrd not found: $InitrdPath (run: python tools/m0_build.py initrd)" }
+if ($GpuMode -eq "gfxstream") {
+    $InitrdGpu = Join-Path $M0Dir "initrd_gpu.img"
+    if (Test-Path $InitrdGpu) { $InitrdPath = $InitrdGpu }
+}
 $DiskPath   = Join-Path $M0Dir "disk.raw"
 $SerialLog  = Join-Path $M0Dir "serial.log"
 
@@ -150,7 +166,7 @@ function Build-QemuArgs {
     # 4 UARTs, quiet console, binder rust impl, firmware from vendor/etc)
     $append = "console=ttyAMA0 earlycon=pl011,0x9000000 quiet loglevel=0 " +
               "printk.devkmsg=on audit=0 panic=-1 8250.nr_uarts=4 " +
-              "binder.impl=rust cma=0 firmware_class.path=/vendor/etc/ " +
+              "androidboot.hardware.gltransport=virtio-gpu-pipe binder.impl=rust cma=0 firmware_class.path=/vendor/etc/ " +
               "loop.max_part=7 init=/init bootconfig"
     # Optional gralloc override (e.g. 'default' fixes R/B-swap on plain
     # virtio-gpu scanout by using the CPU gralloc instead of minigbm).
@@ -177,8 +193,8 @@ function Build-QemuArgs {
     switch ($GpuMode) {
         'basic' {
             $gpu = @("-device", "virtio-gpu-pci,xres=1280,yres=800") }
-        default {   # gfxstream
-            $gpu = @("-device", "virtio-gpu-rutabaga-pci,addr=03.0,gfxstream-vulkan=on,xres=1280,yres=800") }
+        default {   # gfxstream (hostmem required for blob mapping!)
+            $gpu = @("-device", "virtio-gpu-rutabaga-pci,addr=03.0,gfxstream-vulkan=on,hostmem=8G,xres=1280,yres=800") }
     }
 
     $inputDev = @()
