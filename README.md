@@ -1,110 +1,171 @@
 # ARM64 Android Emulator for Windows (Snapdragon X Elite)
 
-A high-performance, open-source Android 16 (Baklava) emulator designed specifically for **Windows 11 on ARM64** (Qualcomm Snapdragon X Elite / Plus, Surface Pro 11, ThinkPad T14s, etc.).
+A working **Android 16 (Baklava) Cuttlefish ARM64 emulator** for **Windows 11 on
+ARM64** (Qualcomm Snapdragon X Elite / Plus, Surface Pro 11, ThinkPad T14s, ...),
+accelerated by **Windows Hypervisor Platform (WHPX)** with a SwiftShader guest
+GPU — fully usable today: **boot, display, touch, keyboard, audio, ADB**.
 
-This project achieves full, bare-metal speed virtualization through **Windows Hypervisor Platform (WHPX)** with **direct in-GUI display rendering**, hardware touch/pointer tracking via `virtio-tablet`, and native ADB networking.
-
----
-
-## 🚀 Key Features
-
-* **Direct Embedded GUI Display**: Live Android screen stream rendered directly inside the Tauri window via hardware-accelerated HTML5 Canvas (`@novnc/novnc` WebSocket RFB).
-* **Native Virtualization (WHPX)**: Near-zero CPU overhead with `-accel whpx -cpu host` (no instruction translation / emulation needed).
-* **Interactive Navigation & Hardware Controls**: Back, Home, Recents, Volume, Power, and Direct Text Typing integrated into the app toolbar.
-* **VirtIO Subsystems**: VirtIO Block (GPT storage), VirtIO Net (slirp with port forwarding on `127.0.0.1:5555`), VirtIO GPU (SwiftShader Vulkan CPU / ANGLE), and VirtIO Tablet (1:1 absolute touch tracking).
-* **Cross-Platform Tooling**: Includes both a native PowerShell launcher (`tools/launch.ps1`) and a Tauri v2 desktop application.
+> **GPU passthrough (gfxstream/ranchu) is documented but NOT working yet** —
+> blocked by a Windows-ARM64 platform limitation. See [GPU passthrough status](#gpu-passthrough-status).
 
 ---
 
-## 🏗️ Repository Architecture
+## ✅ Working Today (Verified)
+
+| Feature | Status | Notes |
+|---------|--------|-------|
+| Boot to launcher | ✅ | Android 16 (Baklava), AOSP Cuttlefish image |
+| Display (SDL window) | ✅ | 1280x800, correct colors (R/B swap fixed) |
+| Touch | ✅ | USB-tablet absolute pointer |
+| Keyboard | ✅ | USB HID keyboard |
+| Audio | ✅ | virtio-sound (virtio_snd driver) |
+| ADB over TCP | ✅ | `adb connect 127.0.0.1:5555` |
+| GPU (guest) | ✅ | SwiftShader (CPU, ~11 fps — usable for dev) |
+| Virtualization | ✅ | WHPX (`-accel whpx -cpu host`) |
+
+---
+
+## 🚀 Quick Start (Reproduce)
+
+Everything needed is in this repo (QEMU build, launch scripts, image pipeline).
+Run one script — it rebuilds the boot artifacts in the **correct order**
+(bootconfig → initrd → disk) and launches:
+
+```powershell
+cd C:\Users\erict\OneDrive\Desktop\Arm64AndroidEmulator
+tools\reproduce.ps1
+```
+
+`tools\reproduce.ps1` does:
+1. Preflight-checks the Cuttlefish image pieces (`boot.img`, `super.img`,
+   `out_init/ramdisk`, `out_vendor/vendor_ramdisk00`, ...).
+2. Rebuilds `bootconfig` then `initrd` — **order matters**: the `initrd` stage
+   embeds the *existing* `bootconfig.bin`, so `bootconfig` must run first.
+   Includes `androidboot.lcd_density=240` (hdpi for 1280x800 — prevents the
+   cut-off launcher / missing nav bar).
+3. Builds `disk.raw` (GPT, 16 GB sparse) if missing.
+4. Launches QEMU: `-DisplayMode sdl -GpuMode basic`.
+5. Waits for boot, applies the runtime display fix (`wm size 1280x800;
+   wm density 240`), prints the resolved display.
+
+### Manual / step-by-step
+
+```powershell
+# 1. Build boot artifacts (ORDER: bootconfig then initrd!)
+python tools/m0_build.py bootconfig
+python tools/m0_build.py initrd
+#    (fresh disk only needed once)
+python tools/m0_build.py disk
+
+# 2. Launch
+tools\launch.ps1 -DisplayMode sdl -GpuMode basic
+
+# 3. Connect (another terminal)
+C:\platform-tools\adb.exe connect 127.0.0.1:5555
+C:\platform-tools\adb.exe -s 127.0.0.1:5555 shell getprop sys.boot_completed
+#    → 1
+```
+
+### Launch script options
+
+```powershell
+tools\launch.ps1 -DisplayMode <sdl|gtk|none|scrcpy|vnc> -GpuMode <basic|gfxstream> [-Memory 6G] [-Cores 6] [-PrintArgs]
+```
+
+* `-DisplayMode sdl / gtk` — native window (recommended).
+* `-DisplayMode none / scrcpy` — headless + external scrcpy client.
+* `-GpuMode basic` — plain `virtio-gpu-pci`; works on **any** QEMU incl. the
+  stock msys2 binary (`C:\msys64\clangarm64\bin\qemu-system-aarch64.exe`).
+* `-GpuMode gfxstream` — `virtio-gpu-rutabaga-pci` (repo-local custom QEMU);
+  see [GPU passthrough status](#gpu-passthrough-status).
+* `-PrintArgs` — print the resolved QEMU argv without booting (safe diffing).
+
+### Prerequisites
+
+1. **Windows 11 ARM64** with **Windows Hypervisor Platform** enabled
+   (Settings → Optional features → Windows Hypervisor Platform).
+2. **QEMU**: either the repo-local custom build
+   (`tools\qemu-gfxstream\qemu\build\qemu-system-aarch64.exe`) or the stock
+   msys2 clangarm64 package: `pacman -S mingw-w64-clang-aarch64-qemu`.
+3. **Python 3** on PATH (used by `m0_build.py`).
+4. **ADB platform-tools** at `C:\platform-tools\adb.exe` (or edit the paths in
+   the scripts).
+5. The **Cuttlefish ARM64 image** extracted into `aosp_cf_arm64_only_phone-img\`
+   (`boot.img`, `super.img`, `init_boot.img`, `vendor_boot.img`, plus the
+   unpacked ramdisks in `out_init\` / `out_vendor\`).
+
+---
+
+## 🏗️ Repository Layout (What Matters)
 
 ```
 Arm64AndroidEmulator/
-├── src/                        # React + TypeScript Frontend (Vite)
-│   ├── App.tsx                 # Embedded VNC screen & Navigation Toolbar
-│   ├── App.css                 # Dark-mode styling and responsive canvas layout
-│   └── main.tsx                # App entrypoint
-├── src-tauri/                  # Rust Backend (Tauri v2)
-│   ├── src/lib.rs              # VM lifecycle management, ADB bridge, status polling
-│   ├── tauri.conf.json         # Window configuration & permissions
-│   └── Cargo.toml              # Rust crate dependencies
-├── tools/                      # Emulator Build & Launch Toolchain
-│   ├── launch.ps1              # Native PowerShell launch harness (GUI / Headless / Embedded)
-│   ├── launch.ps1              # Canonical launcher (Build-QemuArgs)
-│   ├── m0_build.py             # Composite GPT disk, bootconfig, and initrd generator
-│   ├── init_wrapper.c          # Custom static aarch64 ELF early init wrapper
-│   ├── init_wrapper.elf        # Pre-built static ELF binary
-│   ├── diag/                   # Diagnostic & probing utilities
-│   └── mkbootimg/              # Android boot image packing/unpacking tool
-├── research/                   # Engineering Whitepapers & Docs
-│   ├── android-on-arm64-pc.md  # Comprehensive research paper on ARM64 Android on Windows
-│   ├── docs/                   # Reference documentation & specs
-│   └── aosp-src/               # AOSP source reference headers & implementations
-├── screenshot.png              # Android 16 live boot verification screenshot
-├── package.json                # NPM configuration & dependencies
+├── tools/
+│   ├── reproduce.ps1           # ★ ONE-SHOT reproduce: build + launch + verify
+│   ├── launch.ps1              # Canonical QEMU launcher (single source of argv)
+│   ├── m0_build.py             # bootconfig / initrd / GPT disk generator
+│   ├── build_gfxstream_msvc.bat# MSVC/clang-cl gfxstream build (WIP, blocked)
+│   └── qemu-gfxstream/         # Custom QEMU 11 + gfxstream/rutabaga sources
+├── aosp_cf_arm64_only_phone-img/  # Cuttlefish image + work/m0 artifacts (gitignored)
+├── DECISION_LOG.md             # Full engineering decision history
+├── GPU_PASSTHROUGH_DECISION.md # Honest GPU-passthrough assessment
+├── docs/research/GPU_PASSTHROUGH_RETHOUGHT.md  # Deep dive into EGL/Vulkan paths
 └── README.md
 ```
 
 ---
 
-## 🛠️ Prerequisites
+## 🖥️ Display Pipeline (how the fixes work)
 
-1. **Windows 11 ARM64 PC**: (Qualcomm Snapdragon X Elite / Plus, Surface Pro 11, etc.).
-2. **Enable Virtualization**:
-   * Turn on **Windows Hypervisor Platform** (`whpx`) in *Turn Windows features on or off*.
-3. **QEMU ARM64 (CLANGARM64 Toolchain)**:
-   * Install MSYS2 and install QEMU aarch64:
-     ```bash
-     pacman -S mingw-w64-clang-aarch64-qemu
-     ```
-   * Ensure QEMU is present at `C:\msys64\clangarm64\bin\qemu-system-aarch64.exe`.
-4. **Node.js & Rust**:
-   * Node.js v18+ and Rust (`cargo`) installed.
+```
+virtio-gpu-pci (xres=1280, yres=800)
+  → guest kernel framebuffer (video=virtio-fb:1280x800@60)
+  → SurfaceFlinger @ density 240 (androidboot.lcd_density=240)
+  → SDL window 1280x800
+```
+
+Three coordinated fixes prevent the cut-off launcher / missing nav bar:
+
+1. **`video=virtio-fb:1280x800@60`** (kernel cmdline) — framebuffer matches the
+   virtio-gpu device.
+2. **`androidboot.lcd_density=240`** (kernel cmdline **and** bootconfig) —
+   hdpi density at boot, so the launcher never lays out for a taller phone
+   screen. The bootconfig value is what actually sticks; cmdline is a backup.
+3. **Runtime watchdog** (`wm size 1280x800; wm density 240` after
+   `sys.boot_completed=1`) — belt-and-suspenders re-assertion.
+
+> ⚠️ If you rebuild `initrd.img`, always rebuild `bootconfig` first — the
+> initrd embeds the existing `bootconfig.bin`. (This exact mistake caused the
+> density fix to silently not apply — see DECISION_LOG.)
 
 ---
 
-## 🚦 Getting Started
+## 🎮 GPU Passthrough Status
 
-### 1. Build & Generate Android Disk Images
-Generate the customized ramdisk and composite GPT disk image:
-```powershell
-python tools/m0_build.py initrd
-python tools/m0_build.py disk
-```
+**Blocked by a Windows-ARM64 platform limitation — not by this repo.**
 
-### 2. Run via Tauri Desktop Application (Embedded Screen)
-```powershell
-npm install
-npm run tauri dev
-```
-Click **"▶ Launch Emulator"** to boot the system. The screen will automatically stream and become interactive inside the window.
+| Path | Host GLES | Host Vulkan | Works? |
+|------|-----------|-------------|--------|
+| SDL + basic (SwiftShader) | — | — | ✅ **Working** |
+| gfxstream/ranchu (Vulkan-only) | ❌ | ✅ | ❌ SurfaceFlinger needs GLES interop |
 
-### 3. Run Standalone from PowerShell
-```powershell
-# Launch with native SDL graphical window
-.\tools\launch.ps1
+**Root cause chain** (details in `GPU_PASSTHROUGH_DECISION.md`):
+1. gfxstream's host GLES renderer uses **WGL (desktop OpenGL)** → **no native
+   desktop OpenGL on Windows ARM64** → `x-gfxstream-gles` capset crashes QEMU.
+2. MinGW build additionally skips the static EGL dispatch (`#if
+   !defined(__MINGW64__)`), so `glInteropSupported=false`.
+3. MSVC/clang-cl rebuild is the correct toolchain but is **blocked by
+   `#include_next` header-chain incompatibilities** with the MSVC CRT
+   (ctime/clock_t, min/max macros, PATH_MAX) — a multi-week port.
+4. Even with gfxstream fixed, host Vulkan on ARM64 goes through **dzn**
+   (D3D12→Vulkan) which **lacks `VK_KHR_external_memory_fd`** — no zero-copy
+   GPU sharing until Qualcomm ships a native Vulkan ICD for Windows ARM64.
 
-# Launch in headless mode for background ADB testing
-.\tools\launch.ps1 -Headless
-```
-
----
-
-## 📱 Connecting via ADB
-
-Once the VM is running, attach via standard Android Debug Bridge:
-```powershell
-adb connect 127.0.0.1:5555
-adb -s 127.0.0.1:5555 shell
-```
-
-Verify boot completion:
-```powershell
-adb -s 127.0.0.1:5555 shell getprop sys.boot_completed
-# Output: 1
-```
+**Options**: accept SwiftShader for dev, wait for Qualcomm/Microsoft/Google to
+ship native GPU passthrough, or remote-render from a Linux ARM64 host.
 
 ---
 
 ## 📜 License
-Open Source under the Apache 2.0 / MIT License.
+
+Open Source — Apache 2.0 / MIT (see individual files).
