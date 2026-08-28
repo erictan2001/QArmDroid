@@ -33,6 +33,11 @@ fetch_cvd
 combined_initrd.img
 adb_keys
 
+# Research / build artifacts (large source trees, not part of the repo)
+angle-repo/
+chromium-src/
+wsa-extracted/
+
 # IDE & OS Files
 .vscode/*
 !.vscode/extensions.json
