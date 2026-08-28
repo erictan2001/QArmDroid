@@ -1,4 +1,4 @@
-# STATUS — Arm64AndroidEmulator
+# STATUS — QArmDroid
 
 Single source of truth for the current state of this project.
 Historical session documents live in `DEVELOPMENT_LOG.md`, `PERFORMANCE.md`,

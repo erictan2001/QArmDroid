@@ -1,4 +1,4 @@
-# Arm64AndroidEmulator — Development Log
+# QArmDroid — Development Log
 
 ## Goal
 Run Android 16 ARM64 on Snapdragon X Elite (Windows ARM64) with GPU-accelerated rendering at 60 FPS, matching MuMu Player performance.

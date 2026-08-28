@@ -1,6 +1,6 @@
 # Making Android Bootable and Running on ARM64 PCs
 
-Research note for the **ARM64 Android Emulator** project (Snapdragon X Elite / Windows ARM64 host).
+Research note for the **QArmDroid** project (ARM64 Android Emulator on Snapdragon X Elite / Windows ARM64 host).
 Every factual claim below carries a link to its primary source; where a claim could not be
 verified against a primary source this session, it is labeled as such and moved to
 [§7 Open questions](#7-open-questions--risks).

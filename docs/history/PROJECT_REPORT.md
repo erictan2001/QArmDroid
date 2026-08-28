@@ -1,4 +1,4 @@
-﻿# Comprehensive Project Report: ARM64 Android Emulator on Windows 11 ARM64
+# Comprehensive Project Report: QArmDroid — ARM64 Android Emulator on Windows 11 ARM64
 
 ---
 

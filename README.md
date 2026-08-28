@@ -1,4 +1,4 @@
-# ARM64 Android Emulator for Windows (Snapdragon X Elite)
+# QArmDroid — ARM64 Android Emulator for Windows (Snapdragon X Elite)
 
 A working **Android 16 (Baklava) Cuttlefish ARM64 emulator** for **Windows 11 on
 ARM64** (Qualcomm Snapdragon X Elite / Plus, Surface Pro 11, ThinkPad T14s, ...),
@@ -28,7 +28,7 @@ GPU — fully usable today: **boot, display, touch, keyboard, audio, ADB**.
 ## 🚀 Quick Start (Reproduce from a fresh clone)
 
 ```powershell
-cd <your-clone-location>\Arm64AndroidEmulator
+cd <your-clone-location>\QArmDroid
 .\tools\bootstrap_env.ps1     # 1. detect python/adb/qemu -> tools\env.json
 .\tools\apply_patches.ps1     # 2. apply custom QEMU/gfxstream patches (idempotent)
 .\tools\setup_image.ps1 -ImageZip C:\path\to\aosp_cf_arm64_only_phone-img-<build>.zip   # 3. unpack image (first run only)
@@ -106,7 +106,7 @@ tools\launch.ps1 -DisplayMode <sdl|gtk|none|scrcpy|vnc> -GpuMode <basic|gfxstrea
 ## 🏗️ Repository Layout (What Matters)
 
 ```
-Arm64AndroidEmulator/
+QArmDroid/
 ├── tools/
 │   ├── reproduce.ps1           # ★ ONE-SHOT reproduce: env + patches + image + build + launch + verify
 │   ├── bootstrap_env.ps1       # detect python/adb/qemu -> tools/env.json (machine-independent)

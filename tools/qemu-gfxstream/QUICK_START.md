@@ -1,4 +1,4 @@
-# Quick Start — Android 16 ARM64 Emulator
+# Quick Start — QArmDroid (Android 16 ARM64 Emulator)
 
 > Canonical entry point is `tools\launch.ps1` for just launching, or
 > **`tools\reproduce.ps1`** for the one-shot clone→working pipeline
@@ -8,7 +8,7 @@
 ## One-shot reproduce (fresh clone)
 
 ```powershell
-cd <clone>\Arm64AndroidEmulator
+cd <clone>\QArmDroid
 .\tools\reproduce.ps1 -ImageZip C:\path\to\aosp_cf_arm64_only_phone-img-<build>.zip
 # subsequent runs: .\tools\reproduce.ps1   (reuses existing image + artifacts)
 ```
