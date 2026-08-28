@@ -56,3 +56,22 @@ Thumbs.db
 # Per-machine environment (paths differ per clone host)
 tools/env.json
 .patchtest/
+
+# Build artifacts & tool downloads (history-cleaned; keep locally only)
+# These were removed from git history (see DECISION_LOG); they remain on
+# disk for the local build environment but must never be re-committed.
+.backup-history.bundle
+tools/git-filter-repo
+tools/qemu-gfxstream/pysite/
+tools/qemu-gfxstream/bin/
+tools/qemu-gfxstream/arch-pkg/
+tools/qemu-gfxstream/rutabaga-prefix/
+tools/qemu-gfxstream/gfxstream-install/
+tools/qemu-gfxstream/turnip/
+tools/qemu-gfxstream/downloads/
+tools/qemu-gfxstream/ninja-test/
+tools/qemu-gfxstream/_ctxinit_debug/
+tools/qemu-gfxstream/tools/
+tools/scrcpy/
+work_sdk/
+research/artifacts/
