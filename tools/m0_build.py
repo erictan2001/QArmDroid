@@ -87,9 +87,9 @@ def build_bootconfig() -> bytes:
         "androidboot.hardware.hwcomposer.display_framebuffer_format=bgra",
         "androidboot.hardware.hwcomposer.mode=client",
         # other ro.boot.* props init_graphics.vendor.rc / system rc expand:
-        # CF_DEFAULTS_DISPLAY_DPI=320, CF_DEFAULTS_SETUPWIZARD_MODE=DISABLED,
+        # CF_DEFAULTS_DISPLAY_DPI=240 (hdpi for 1280x800), CF_DEFAULTS_SETUPWIZARD_MODE=DISABLED,
         # hw_timeout_multiplier=3 (native arch), hypervisor.vm.supported=0 (arm64).
-        "androidboot.lcd_density=320",
+        "androidboot.lcd_density=240",
         "androidboot.setupwizard_mode=DISABLED",
         "androidboot.hw_timeout_multiplier=3",
         "androidboot.hypervisor.vm.supported=0",
