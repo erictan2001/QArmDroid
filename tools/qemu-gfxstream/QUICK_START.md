@@ -1,8 +1,32 @@
 # Quick Start — Android 16 ARM64 Emulator
 
-> Canonical entry point is `tools\launch.ps1`. The old
-> `tools\qemu-gfxstream\run_vm.bat` and friends were divergent copies and
-> have been deleted. Current state: see root `STATUS.md`.
+> Canonical entry point is `tools\launch.ps1` for just launching, or
+> **`tools\reproduce.ps1`** for the one-shot clone→working pipeline
+> (env detect → patches → image unpack → bootartifacts → launch → verify).
+> Current state: see root `STATUS.md` / `README.md`.
+
+## One-shot reproduce (fresh clone)
+
+```powershell
+cd <clone>\Arm64AndroidEmulator
+.\tools\reproduce.ps1 -ImageZip C:\path\to\aosp_cf_arm64_only_phone-img-<build>.zip
+# subsequent runs: .\tools\reproduce.ps1   (reuses existing image + artifacts)
+```
+
+Manual steps equivalent:
+
+```powershell
+.\tools\bootstrap_env.ps1                       # detect python/adb/qemu -> env.json
+.\tools\apply_patches.ps1                       # apply custom QEMU/gfxstream patches
+.\tools\setup_image.ps1 -ImageZip <img.zip>     # unpack image (first time only)
+python tools\m0_build.py bootconfig
+python tools\m0_build.py initrd
+python tools\m0_build.py disk                   # if disk.raw missing (slow)
+tools\launch.ps1 -DisplayMode sdl -GpuMode basic
+```
+
+> No msys2 / busybox / lz4.exe / simg2img.exe needed for the build pipeline:
+> `tools\imgtools.py` implements lz4 + sparse + cpio in pure Python (stdlib).
 
 ## Boot (headless, pairs with scrcpy)
 

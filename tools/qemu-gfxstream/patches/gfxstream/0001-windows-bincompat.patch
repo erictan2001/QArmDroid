@@ -1,0 +1,257 @@
+diff --git a/host/address_space/ring_buffer.cpp b/host/address_space/ring_buffer.cpp
+index 6644c8c..d83f1c2 100644
+--- a/host/address_space/ring_buffer.cpp
++++ b/host/address_space/ring_buffer.cpp
+@@ -1,4 +1,4 @@
+-// Copyright 2025 The Android Open Source Project
++﻿// Copyright 2025 The Android Open Source Project
+ //
+ // Licensed under the Apache License, Version 2.0 (the "License");
+ // you may not use this file except in compliance with the License.
+@@ -23,7 +23,6 @@
+ #endif
+ 
+ #ifdef __x86_64__
+-#include <emmintrin.h>
+ #endif
+ 
+ #ifdef _WIN32
+@@ -33,6 +32,17 @@
+ #include <unistd.h>
+ #endif
+ 
++
++#if defined(__aarch64__) || defined(_M_ARM64)
++static inline void cpu_pause() { __asm__ volatile("yield"); }
++#elif defined(__x86_64__) || defined(_M_X64)
++#include <emmintrin.h>
++static inline void cpu_pause() { _mm_pause(); }
++#elif defined(_WIN32)
++static inline void cpu_pause() { Sleep(0); }
++#else
++static inline void cpu_pause() { sched_yield(); }
++#endif
+ #define RING_BUFFER_MASK (RING_BUFFER_SIZE - 1)
+ 
+ #define RING_BUFFER_VERSION 1
+@@ -407,7 +417,7 @@ long ring_buffer_view_read(
+ 
+ void ring_buffer_yield() {
+ #ifdef _WIN32
+-    _mm_pause();
++    cpu_pause();
+ #else
+     sched_yield();
+ #endif
+@@ -447,7 +457,7 @@ bool ring_buffer_wait_write(
+ 
+     while (!can_write) {
+ #ifdef __x86_64
+-        _mm_pause();
++        cpu_pause();
+ #endif
+         curr_wait_us = ring_buffer_curr_us() - start_us;
+ 
+@@ -487,7 +497,7 @@ bool ring_buffer_wait_read(
+     while (!can_read) {
+         // TODO(bohu): find aarch64 equivalent
+ #ifdef __x86_64
+-        _mm_pause();
++        cpu_pause();
+ #endif
+         curr_wait_us = ring_buffer_curr_us() - start_us;
+ 
+@@ -593,7 +603,7 @@ uint32_t ring_buffer_read_fully_with_abort(
+ 
+     while (processed < bytes) {
+ #ifdef __x86_64
+-        _mm_pause();
++        cpu_pause();
+ #endif
+         if (bytes - processed < candidate_step) {
+             candidate_step = bytes - processed;
+@@ -679,3 +689,6 @@ void ring_buffer_consumer_wait_producer_idle(struct ring_buffer* r) {
+ void ring_buffer_consumer_hung_up(struct ring_buffer* r) {
+     __atomic_store_n(&r->state, RING_BUFFER_SYNC_CONSUMER_HUNG_UP, __ATOMIC_SEQ_CST);
+ }
++
++
++
+diff --git a/host/gl/OpenGLESDispatch/EGLDispatch.cpp b/host/gl/OpenGLESDispatch/EGLDispatch.cpp
+index 16ad40f..0d7125e 100644
+--- a/host/gl/OpenGLESDispatch/EGLDispatch.cpp
++++ b/host/gl/OpenGLESDispatch/EGLDispatch.cpp
+@@ -40,14 +40,14 @@ EGLDispatch s_egl;
+ bool init_egl_dispatch() {
+     if (s_egl.initialized) return true;
+ 
+-#if !defined(__MINGW64__)
++
+     LIST_RENDER_EGL_FUNCTIONS(RENDER_EGL_LOAD_FIELD_STATIC)
+-#endif // !defined(__MINGW64__)
++
+     LIST_RENDER_EGL_FUNCTIONS(RENDER_EGL_LOAD_FIELD_WITH_EGL)
+-#if !defined(__MINGW64__)
++
+     LIST_RENDER_EGL_EXTENSIONS_FUNCTIONS(RENDER_EGL_LOAD_OPTIONAL_FIELD_STATIC)
+     LIST_RENDER_EGL_SNAPSHOT_FUNCTIONS(RENDER_EGL_LOAD_FIELD_STATIC)
+-#endif // !defined(__MINGW64__)
++
+ 
+     s_egl.initialized = true;
+     return true;
+diff --git a/host/vulkan/external_memory.cpp b/host/vulkan/external_memory.cpp
+index 356f624..f63db39 100644
+--- a/host/vulkan/external_memory.cpp
++++ b/host/vulkan/external_memory.cpp
+@@ -99,6 +99,11 @@ ExternalMemory::Mode ExternalMemory::calculateMode(
+     }
+ 
+ #if defined(_WIN32)
++    // FORCE OpaqueWin32 on Windows regardless of extension detection.
++    // Drivers may omit core-promoted extension strings but still support
++    // the functionality. Without this, external memory is never enabled
++    // and the guest falls back to SwiftShader CPU rendering.
++    return Mode::OpaqueWin32;
+     std::array<Mode, 2> supportedModes = {
+         Mode::OpaqueWin32,
+         Mode::HostAllocation,
+@@ -162,7 +167,10 @@ void ExternalMemory::getDeviceExtensionsForMode(const ExternalMemory::Mode mode,
+     // These will always be necessary
+     outDeviceExtensions.push_back(VK_KHR_DEDICATED_ALLOCATION_EXTENSION_NAME);
+     outDeviceExtensions.push_back(VK_KHR_GET_MEMORY_REQUIREMENTS_2_EXTENSION_NAME);
+-    outDeviceExtensions.push_back(VK_KHR_EXTERNAL_MEMORY_EXTENSION_NAME);
++    // NOTE: VK_KHR_EXTERNAL_MEMORY_EXTENSION_NAME omitted — core-promoted since
++    // Vulkan 1.1. Drivers (Qualcomm Adreno, Mesa Dozen) legally omit the string
++    // but fully support the functionality. Checking for it causes false negatives.
++    // outDeviceExtensions.push_back(VK_KHR_EXTERNAL_MEMORY_EXTENSION_NAME);
+ 
+     switch (mode) {
+         case Mode::OpaqueFd:
+diff --git a/host/vulkan/vk_common_operations.cpp b/host/vulkan/vk_common_operations.cpp
+index 7ea71ef..2e85dde 100644
+--- a/host/vulkan/vk_common_operations.cpp
++++ b/host/vulkan/vk_common_operations.cpp
+@@ -752,14 +752,34 @@ int VkEmulation::getSelectedGpuIndex(
+         const uint32_t patch = VK_API_VERSION_PATCH(deviceInfo.physdevProps.apiVersion);
+         deviceScore += major * 5000 + std::min(minor, 10u) * 500 + std::min(patch, 400u);
+ 
++        // ★ CRITICAL: STRONGLY prefer devices with actual Win32 external memory support.
++        // Check the extension list DIRECTLY rather than relying on supportsExternalMemoryExport
++        // which may not be set yet at scoring time. On Windows ARM64, native Adreno has
++        // higher API version but lacks VK_KHR_external_memory_win32, while Dozen HAS it.
++#if defined(_WIN32)
++        {
++            bool hasWin32Ext = false;
++            for (const auto& ext : deviceInfo.extensions) {
++                if (strcmp(ext.extensionName, "VK_KHR_external_memory_win32") == 0) {
++                    hasWin32Ext = true;
++                    break;
++                }
++            }
++            if (hasWin32Ext) {
++                deviceScore += 100000;
++            }
++        }
++#endif
++
+         return deviceScore;
+     };
+ 
+     uint32_t maxScore = 0;
+     for (int i = 0; i < physicalDeviceCount; ++i) {
+         const uint32_t score = getDeviceScore(deviceInfos[i]);
+-        GFXSTREAM_DEBUG("Device selection score for '%s' = %d",
+-                        deviceInfos[i].physdevProps.deviceName, score);
++        GFXSTREAM_INFO("Device selection score for '%s' = %d (extMemExport=%d)",
++                        deviceInfos[i].physdevProps.deviceName, score,
++                        deviceInfos[i].supportsExternalMemoryExport ? 1 : 0);
+         if (score > maxScore) {
+             selectedGpuIndex = i;
+             maxScore = score;
+@@ -823,6 +843,12 @@ std::unique_ptr<VkEmulation> VkEmulation::create(VulkanDispatch* gvk,
+         vk_util::extensionsSupported(instanceExts, getPhysicalDeviceProperties2InstanceExtNames);
+     bool externalMemoryCapabilitiesSupported = getPhysicalDeviceProperties2Supported &&
+         vk_util::extensionsSupported(instanceExts, externalMemoryInstanceExtNames);
++    // ★ FORCE: On Windows ARM64, instance-level extension strings may be absent
++    // even when the functionality exists. Without this, supportsExternalMemoryExport
++    // stays false and the guest falls back to SwiftShader.
++#if defined(_WIN32)
++    externalMemoryCapabilitiesSupported = true;
++#endif
+     bool externalSemaphoreCapabilitiesSupported = getPhysicalDeviceProperties2Supported &&
+         vk_util::extensionsSupported(instanceExts, externalSemaphoreInstanceExtNames);
+     bool externalFenceCapabilitiesSupported = getPhysicalDeviceProperties2Supported &&
+@@ -842,7 +868,7 @@ std::unique_ptr<VkEmulation> VkEmulation::create(VulkanDispatch* gvk,
+         .applicationVersion = 1,
+         .pEngineName = "AEMU",
+         .engineVersion = 1,
+-        .apiVersion = VK_MAKE_VERSION(1, 0, 0),
++        .apiVersion = VK_MAKE_VERSION(1, 1, 0),
+     };
+ 
+     VkInstanceCreateInfo instCi = {
+@@ -1352,9 +1378,9 @@ std::unique_ptr<VkEmulation> VkEmulation::create(VulkanDispatch* gvk,
+                     emulation->mDeviceInfo.hasComputeQueueFamily ? "true" : "false");
+     GFXSTREAM_DEBUG("    externalMemoryMode = %s",
+                     ExternalMemory::to_string(emulation->mDeviceInfo.externalMemoryMode));
+-    GFXSTREAM_DEBUG("    supportsExternalMemoryImport = %s",
++    GFXSTREAM_INFO("    supportsExternalMemoryImport = %s",
+                     emulation->mDeviceInfo.supportsExternalMemoryImport ? "true" : "false");
+-    GFXSTREAM_DEBUG("    supportsExternalMemoryExport = %s",
++    GFXSTREAM_INFO("    supportsExternalMemoryExport = %s",
+                     emulation->mDeviceInfo.supportsExternalMemoryExport ? "true" : "false");
+     GFXSTREAM_DEBUG("    supportsDmaBuf = %s",
+                     emulation->mDeviceInfo.supportsDmaBuf ? "true" : "false");
+@@ -1907,7 +1933,7 @@ void VkEmulation::setFeatures(const gfxstream::host::FeatureSet& features) {
+                 "Ensure host allocations are aligned to "
+                 "avoid VMM errors when mapping.");
+             GFXSTREAM_INFO("Enabling VulkanAllocateHostMemory: %s",
+-                           mFeatures.VulkanAllocateHostMemory.getReason());
++                           mFeatures.VulkanAllocateHostMemory.getReason().c_str());
+         }
+     }
+ #endif
+@@ -2065,7 +2091,7 @@ MTLResource_id VkEmulation::getMtlResourceFromVkDeviceMemory(VulkanDispatch* vk,
+ // Allocate an AHardwareBuffer matching the given image's format, extent and usage.
+ // Returns nullptr on failure (caller falls back to the non-AHB allocation path).
+ static AHardwareBuffer* allocAhb(const VkImageCreateInfo* imageCreateInfo) {
+-    // Map VkFormat to the corresponding AHB format — must match to avoid tiling mismatch.
++    // Map VkFormat to the corresponding AHB format â€” must match to avoid tiling mismatch.
+     uint32_t ahbFormat;
+     switch (imageCreateInfo->format) {
+         case VK_FORMAT_B8G8R8A8_UNORM:
+@@ -2477,6 +2503,9 @@ bool VkEmulation::allocExternalMemory(VulkanDispatch* vk, VkEmulation::ExternalM
+     }
+ 
+     if (!mDeviceInfo.supportsExternalMemoryExport) {
++        GFXSTREAM_INFO("allocExternalMemory: SKIPPING handle creation (export=false import=%d mode=%d)",
++                       mDeviceInfo.supportsExternalMemoryImport ? 1 : 0,
++                       static_cast<int>(mDeviceInfo.externalMemoryMode));
+         return true;
+     }
+ 
+diff --git a/host/vulkan/vk_decoder.cpp b/host/vulkan/vk_decoder.cpp
+index 9728139..aa1d410 100644
+--- a/host/vulkan/vk_decoder.cpp
++++ b/host/vulkan/vk_decoder.cpp
+@@ -1,4 +1,4 @@
+-// Copyright (C) 2018 The Android Open Source Project
++﻿// Copyright (C) 2018 The Android Open Source Project
+ // Copyright (C) 2018 Google Inc.
+ //
+ // Licensed under the Apache License, Version 2.0 (the "License");
+@@ -171,7 +171,7 @@ size_t VkDecoder::Impl::decode(void* buf, size_t len, IOStream* ioStream,
+                             return 0;
+                         }
+ #if (defined(_MSC_VER) && (defined(_M_IX86) || defined(_M_X64)))
+-                        _mm_pause();
++                        __asm__ volatile("yield");
+ #elif (defined(__GNUC__) && (defined(__i386__) || defined(__x86_64__)))
+                         __asm__ __volatile__("pause;");
+ #endif
+@@ -23223,3 +23223,4 @@ size_t VkDecoder::Impl::decode(void* buf, size_t len, IOStream* ioStream,
+ }  // namespace vk
+ }  // namespace host
+ }  // namespace gfxstream
++

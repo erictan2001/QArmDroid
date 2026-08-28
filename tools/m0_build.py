@@ -18,8 +18,11 @@ ROOT = r"C:\Users\erict\OneDrive\Desktop\Arm64AndroidEmulator"
 IMG = os.path.join(ROOT, "aosp_cf_arm64_only_phone-img")
 WORK = os.path.join(IMG, "work", "m0")
 MSYS_BIN = r"C:\msys64\clangarm64\bin"
-LZ4 = os.path.join(MSYS_BIN, "lz4.exe")
-SIMG2IMG = os.path.join(MSYS_BIN, "simg2img.exe")
+# Pure-Python image tools (lz4 / sparse / cpio) — no external binaries needed.
+sys.path.insert(0, os.path.join(ROOT, "tools"))
+import imgtools
+LZ4 = os.path.join(MSYS_BIN, "lz4.exe")      # optional fallback only
+SIMG2IMG = os.path.join(MSYS_BIN, "simg2img.exe")  # optional fallback only
 
 DISK_NAME = "disk.raw"
 SECTOR = 512
@@ -176,7 +179,8 @@ def make_gpt(disk_path: str, parts: list):
     return total_lba
 
 def sparse_copy(sparse_path: str, raw_path: str):
-    run([SIMG2IMG, sparse_path, raw_path])
+    """Unsparse (or copy raw) via pure-Python imgtools — no simg2img.exe."""
+    imgtools.simg2img(sparse_path, raw_path)
 
 def write_at(disk_path: str, lba: int, src_path: str):
     """stream-copy src file into disk at lba offset (sparse-friendly)."""
@@ -222,12 +226,8 @@ def cpio_newc(files: dict) -> bytes:
     return bytes(out)
 
 def lz4_compress(data: bytes) -> bytes:
-    src = os.path.join(WORK, "tmp_cpio")
-    dst = src + ".lz4"
-    with open(src, "wb") as f: f.write(data)
-    if os.path.exists(dst): os.remove(dst)
-    run([LZ4, "-l", "-z", "-f", src, dst])
-    return open(dst, "rb").read()
+    """LZ4 legacy-frame compress via pure-Python imgtools (no lz4.exe)."""
+    return imgtools.lz4_compress(data)
 
 def main():
     os.makedirs(WORK, exist_ok=True)

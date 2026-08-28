@@ -1,23 +1,39 @@
 <#
 .SYNOPSIS
-    Reproduce the WORKING Android 16 ARM64 emulator state from repo artifacts.
+    ONE-SHOT reproduce: turn a fresh clone into a WORKING Android 16 ARM64
+    emulator (SDL window + SwiftShader guest GPU) on Windows ARM64.
 
 .DESCRIPTION
-    Minimal end-to-end reproduction of the verified working configuration
-    (SDL window + SwiftShader guest GPU):
-      1. Rebuild bootconfig + initrd (ORDER MATTERS: bootconfig first, initrd
-         reads the existing bootconfig.bin).
-      2. Rebuild the GPT disk if absent (disk.raw 16 GB sparse).
-      3. Launch QEMU with -DisplayMode sdl -GpuMode basic.
-      4. Wait for ADB, then apply runtime display fixes (wm size/density) and
-         report boot completion.
+    Orchestrates the full pipeline from a clean clone:
 
-    This is the SUPPORTED configuration. gfxstream/ranchu GPU passthrough is
-    documented but BLOCKED (see README "GPU passthrough" section).
+      1. bootstrap_env.ps1   - detect python / adb / qemu (writes tools\env.json)
+      2. apply_patches.ps1   - apply custom QEMU/gfxstream patches to the
+                               nested source trees (idempotent)
+      3. setup_image.ps1     - unpack the Cuttlefish image pieces into the
+                               layout m0_build.py expects (pass -ImageZip or
+                               -ImageDir the first time; afterwards it reuses
+                               the existing image dir)
+      4. Build boot artifacts - python tools\m0_build.py bootconfig
+                               (ORDER MATTERS: bootconfig -> initrd)
+                               python tools\m0_build.py initrd
+                               python tools\m0_build.py disk   (if missing)
+      5. Launch QEMU           - -DisplayMode sdl -GpuMode basic
+      6. Boot watchdog         - wait for sys.boot_completed=1, re-assert
+                                 wm size/density, print resolved display.
+
+    Pure-Python image tools (tools\imgtools.py) mean NO msys2 lz4/simg2img or
+    busybox cpio are needed to build the boot artifacts. The only external
+    programs required are Python 3, ADB, and an aarch64 QEMU.
+
+.PARAMETER ImageZip
+    Path to the Cuttlefish arm64 image zip (first run). Ignored if the image
+    dir already has the pieces.
+
+.PARAMETER ImageDir
+    Path to the already-unpacked Cuttlefish arm64 image directory.
 
 .PARAMETER RebuildDisk
     Force rebuild of disk.raw (slow, ~10-15 min; skip if disk.raw exists).
-    Without it, an existing disk.raw is reused.
 
 .PARAMETER Memory / Cores
     Guest RAM (default 6G) and vCPU count (default 6).
@@ -26,14 +42,15 @@
     Build artifacts only; do not start the emulator.
 
 .EXAMPLE
-    # Full reproduce: build + launch (reuses existing disk.raw)
+    # First run (needs the image zip):
+    .\tools\reproduce.ps1 -ImageZip C:\Users\me\Downloads\aosp_cf_arm64_only_phone-img-22222.zip
+    # After that:
     .\tools\reproduce.ps1
-
-    # Fresh disk + full build + launch
-    .\tools\reproduce.ps1 -RebuildDisk
 #>
 [CmdletBinding()]
 param(
+    [string]$ImageZip,
+    [string]$ImageDir,
     [switch]$RebuildDisk,
     [string]$Memory = "6G",
     [int]$Cores = 6,
@@ -45,39 +62,42 @@ $RepoRoot = (Resolve-Path "$PSScriptRoot\..").Path
 $ImgDir   = Join-Path $RepoRoot "aosp_cf_arm64_only_phone-img"
 $M0Dir    = Join-Path $ImgDir "work\m0"
 $Py       = "python"
-$Adb      = "C:\platform-tools\adb.exe"
 
-# ------------------------------------------------------------ preflight ---- #
-Write-Host "== preflight ==" -ForegroundColor Cyan
-foreach ($p in @($ImgDir, $M0Dir)) {
-    if (-not (Test-Path $p)) { Write-Error "Missing directory: $p" }
+# ---------------------------------------------------------- environment ---- #
+Write-Host "== [1/6] environment ==" -ForegroundColor Cyan
+& (Join-Path $PSScriptRoot "bootstrap_env.ps1")
+$envFile = Join-Path $PSScriptRoot "env.json"
+if (Test-Path $envFile) {
+    $envJson = Get-Content $envFile -Raw | ConvertFrom-Json
+    if ($envJson.python) { $Py = $envJson.python }
 }
-# Source image pieces needed by m0_build.py
-$need = @(
-    (Join-Path $ImgDir "boot.img"),
-    (Join-Path $ImgDir "init_boot.img"),
-    (Join-Path $ImgDir "vendor_boot.img"),
-    (Join-Path $ImgDir "vbmeta.img"),
-    (Join-Path $ImgDir "super.img"),
-    (Join-Path $ImgDir "out_init\ramdisk"),
-    (Join-Path $ImgDir "out_vendor\vendor_ramdisk00")
-)
-$missing = $need | Where-Object { -not (Test-Path $_) }
-if ($missing) {
-    Write-Host "Missing source image pieces (need to extract/untar the Cuttlefish image):" -ForegroundColor Red
-    $missing | ForEach-Object { Write-Host "    $_" }
-    Write-Error "Source image incomplete"
-}
-if (-not (Test-Path $Adb)) { Write-Host "ADB not found at $Adb — install platform-tools" -ForegroundColor Yellow }
 
-# --------------------------------------------------- build artifacts ------ #
-Write-Host "== build: bootconfig ==" -ForegroundColor Cyan
+# --------------------------------------------------------------- patches --- #
+Write-Host "== [2/6] patches (custom QEMU/gfxstream) ==" -ForegroundColor Cyan
+& (Join-Path $PSScriptRoot "apply_patches.ps1")
+
+# ------------------------------------------------------------ image setup -- #
+Write-Host "== [3/6] image ==" -ForegroundColor Cyan
+$imgArgs = @()
+if ($ImageZip)  { $imgArgs += @("-ImageZip", $ImageZip) }
+if ($ImageDir)  { $imgArgs += @("-ImageDir", $ImageDir) }
+if ($imgArgs.Count -eq 0 -and -not (Test-Path (Join-Path $ImgDir "super.img"))) {
+    Write-Host "No image present and none given. You MUST download the Cuttlefish" -ForegroundColor Red
+    Write-Host "ARM64 image and pass -ImageZip or -ImageDir. See README 'Image download'." -ForegroundColor Red
+    Write-Error "missing image (see README)"
+}
+if ($imgArgs.Count -gt 0) {
+    & (Join-Path $PSScriptRoot "setup_image.ps1") @imgArgs
+} else {
+    Write-Host "  reusing existing image dir: $ImgDir" -ForegroundColor DarkGray
+}
+
+# ------------------------------------------------------ build artifacts ---- #
+Write-Host "== [4/6] build bootconfig + initrd ==" -ForegroundColor Cyan
 Push-Location $RepoRoot
 try {
     & $Py "tools\m0_build.py" bootconfig
     if ($LASTEXITCODE -ne 0) { throw "bootconfig stage failed" }
-
-    Write-Host "== build: initrd ==" -ForegroundColor Cyan
     & $Py "tools\m0_build.py" initrd
     if ($LASTEXITCODE -ne 0) { throw "initrd stage failed" }
 
@@ -86,14 +106,14 @@ try {
         & $Py "tools\m0_build.py" disk
         if ($LASTEXITCODE -ne 0) { throw "disk stage failed" }
     } else {
-        Write-Host "== disk.raw exists — reusing ==" -ForegroundColor DarkGray
+        Write-Host "== disk.raw exists - reusing ==" -ForegroundColor DarkGray
     }
 
-    # Verify the density fix made it into the built bootconfig (regression guard)
+    # Regression guard: the density fix must be in the built bootconfig
     $raw = [System.IO.File]::ReadAllBytes((Join-Path $M0Dir "bootconfig.bin"))
     $txt = [System.Text.Encoding]::ASCII.GetString($raw)
     if ($txt -notmatch "lcd_density=240") {
-        Write-Host "WARNING: bootconfig.bin missing lcd_density=240 — display may be cut off" -ForegroundColor Yellow
+        Write-Host "WARNING: bootconfig.bin missing lcd_density=240 - display may be cut off" -ForegroundColor Yellow
     } else {
         Write-Host "OK: bootconfig has lcd_density=240" -ForegroundColor Green
     }
@@ -105,13 +125,15 @@ if ($NoLaunch) {
     return
 }
 
-# -------------------------------------------------------------- launch ---- #
-Write-Host "== launch (SDL + basic) ==" -ForegroundColor Cyan
+# ----------------------------------------------------------------- launch -- #
+Write-Host "== [5/6] launch (SDL + basic) ==" -ForegroundColor Cyan
 $launch = Join-Path $RepoRoot "tools\launch.ps1"
 & $launch -DisplayMode sdl -GpuMode basic -Memory $Memory -Cores $Cores
 
 # ------------------------------------------------------- boot watchdog ---- #
-Write-Host "== waiting for boot (ADB) ==" -ForegroundColor Cyan
+Write-Host "== [6/6] waiting for boot (ADB) ==" -ForegroundColor Cyan
+$Adb = "C:\platform-tools\adb.exe"
+if ($envJson -and $envJson.adb) { $Adb = $envJson.adb }
 $deadline = (Get-Date).AddMinutes(10)
 $booted = $false
 & $Adb connect 127.0.0.1:5555 2>$null | Out-Null
@@ -124,5 +146,5 @@ if ($booted) {
     Write-Host "boot_completed=1" -ForegroundColor Green
     & $Adb -s 127.0.0.1:5555 shell "wm size; wm density" 2>$null
 } else {
-    Write-Host "TIMEOUT waiting for boot — check $M0Dir\serial.log" -ForegroundColor Red
+    Write-Host "TIMEOUT waiting for boot - check $M0Dir\serial.log" -ForegroundColor Red
 }

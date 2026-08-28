@@ -25,28 +25,33 @@ GPU — fully usable today: **boot, display, touch, keyboard, audio, ADB**.
 
 ---
 
-## 🚀 Quick Start (Reproduce)
-
-Everything needed is in this repo (QEMU build, launch scripts, image pipeline).
-Run one script — it rebuilds the boot artifacts in the **correct order**
-(bootconfig → initrd → disk) and launches:
+## 🚀 Quick Start (Reproduce from a fresh clone)
 
 ```powershell
-cd C:\Users\erict\OneDrive\Desktop\Arm64AndroidEmulator
-tools\reproduce.ps1
+cd <your-clone-location>\Arm64AndroidEmulator
+.\tools\bootstrap_env.ps1     # 1. detect python/adb/qemu -> tools\env.json
+.\tools\apply_patches.ps1     # 2. apply custom QEMU/gfxstream patches (idempotent)
+.\tools\setup_image.ps1 -ImageZip C:\path\to\aosp_cf_arm64_only_phone-img-<build>.zip   # 3. unpack image (first run only)
+.\tools\reproduce.ps1         # 4. build bootconfig->initrd->disk + launch + verify
 ```
 
-`tools\reproduce.ps1` does:
-1. Preflight-checks the Cuttlefish image pieces (`boot.img`, `super.img`,
-   `out_init/ramdisk`, `out_vendor/vendor_ramdisk00`, ...).
-2. Rebuilds `bootconfig` then `initrd` — **order matters**: the `initrd` stage
-   embeds the *existing* `bootconfig.bin`, so `bootconfig` must run first.
-   Includes `androidboot.lcd_density=240` (hdpi for 1280x800 — prevents the
-   cut-off launcher / missing nav bar).
-3. Builds `disk.raw` (GPT, 16 GB sparse) if missing.
-4. Launches QEMU: `-DisplayMode sdl -GpuMode basic`.
-5. Waits for boot, applies the runtime display fix (`wm size 1280x800;
-   wm density 240`), prints the resolved display.
+`tools\reproduce.ps1` is the ONE-SHOT entry: it runs environment detection,
+patches, image setup (if you pass `-ImageZip`), rebuilds the boot artifacts in
+the **correct order** (bootconfig → initrd), launches QEMU
+(`-DisplayMode sdl -GpuMode basic`), and waits for `sys.boot_completed=1`.
+
+### Image download (one-time, ~2 GB)
+
+The Android 16 Cuttlefish **arm64** image is not in this repo. Get it from
+[ci.android.com](https://ci.android.com) → branch `aosp-main` → target
+**`aosp_cf_arm64_only_phone-userdebug`** → build artifacts →
+`aosp_cf_arm64_only_phone-img-<BUILD_ID>.zip`. (The old `fetch_cvd` wrapper in
+this repo was a 404 when last tested — download via the web UI instead.)
+
+`setup_image.ps1 -ImageZip <zip>` unzips it and runs the unpack steps
+(`init_boot.img`→`out_init/ramdisk`, `vendor_boot.img`→`out_vendor/vendor_ramdisk00`,
+cpio-extraction of both ramdisks) using **pure-Python tooling** — no msys2,
+busybox, lz4.exe, or simg2img.exe required.
 
 ### Manual / step-by-step
 
@@ -61,8 +66,8 @@ python tools/m0_build.py disk
 tools\launch.ps1 -DisplayMode sdl -GpuMode basic
 
 # 3. Connect (another terminal)
-C:\platform-tools\adb.exe connect 127.0.0.1:5555
-C:\platform-tools\adb.exe -s 127.0.0.1:5555 shell getprop sys.boot_completed
+adb connect 127.0.0.1:5555
+adb -s 127.0.0.1:5555 shell getprop sys.boot_completed
 #    → 1
 ```
 
@@ -74,25 +79,27 @@ tools\launch.ps1 -DisplayMode <sdl|gtk|none|scrcpy|vnc> -GpuMode <basic|gfxstrea
 
 * `-DisplayMode sdl / gtk` — native window (recommended).
 * `-DisplayMode none / scrcpy` — headless + external scrcpy client.
-* `-GpuMode basic` — plain `virtio-gpu-pci`; works on **any** QEMU incl. the
-  stock msys2 binary (`C:\msys64\clangarm64\bin\qemu-system-aarch64.exe`).
+* `-GpuMode basic` — plain `virtio-gpu-pci`; works on **any** aarch64 QEMU
+  (repo-local custom build, msys2 package, or PATH binary).
 * `-GpuMode gfxstream` — `virtio-gpu-rutabaga-pci` (repo-local custom QEMU);
   see [GPU passthrough status](#gpu-passthrough-status).
 * `-PrintArgs` — print the resolved QEMU argv without booting (safe diffing).
 
-### Prerequisites
+### Prerequisites (minimal)
 
 1. **Windows 11 ARM64** with **Windows Hypervisor Platform** enabled
    (Settings → Optional features → Windows Hypervisor Platform).
-2. **QEMU**: either the repo-local custom build
-   (`tools\qemu-gfxstream\qemu\build\qemu-system-aarch64.exe`) or the stock
-   msys2 clangarm64 package: `pacman -S mingw-w64-clang-aarch64-qemu`.
-3. **Python 3** on PATH (used by `m0_build.py`).
-4. **ADB platform-tools** at `C:\platform-tools\adb.exe` (or edit the paths in
-   the scripts).
-5. The **Cuttlefish ARM64 image** extracted into `aosp_cf_arm64_only_phone-img\`
-   (`boot.img`, `super.img`, `init_boot.img`, `vendor_boot.img`, plus the
-   unpacked ramdisks in `out_init\` / `out_vendor\`).
+2. **Python 3** on PATH — used by `m0_build.py`, `imgtools.py`,
+   `setup_image.ps1`. **That's it for the build pipeline**: image compression,
+   sparse expansion and cpio extraction are pure-Python (`tools/imgtools.py`).
+3. **ADB platform-tools** (`adb.exe`) — any location; pass `-Adb` to
+   `bootstrap_env.ps1` if not at the default spots.
+4. **QEMU aarch64** — either the repo-local custom build
+   (`tools\qemu-gfxstream\qemu\build\qemu-system-aarch64.exe`, requires
+   building from source with the msys2 toolchain — see BUILD_LOG.md), or any
+   stock aarch64 QEMU (e.g. `pacman -S mingw-w64-clang-aarch64-qemu` for the
+   custom build's runtime DLLs, or a PATH-installed binary).
+5. The **Cuttlefish ARM64 image** (see "Image download" above).
 
 ---
 
@@ -101,17 +108,34 @@ tools\launch.ps1 -DisplayMode <sdl|gtk|none|scrcpy|vnc> -GpuMode <basic|gfxstrea
 ```
 Arm64AndroidEmulator/
 ├── tools/
-│   ├── reproduce.ps1           # ★ ONE-SHOT reproduce: build + launch + verify
+│   ├── reproduce.ps1           # ★ ONE-SHOT reproduce: env + patches + image + build + launch + verify
+│   ├── bootstrap_env.ps1       # detect python/adb/qemu -> tools/env.json (machine-independent)
+│   ├── apply_patches.ps1       # apply custom QEMU/gfxstream patches to nested sources
+│   ├── setup_image.ps1         # unpack Cuttlefish image zip -> m0_build layout (pure-Python)
+│   ├── imgtools.py             # ★ pure-Python lz4 / sparse-unsparse / cpio (no msys2/busybox)
 │   ├── launch.ps1              # Canonical QEMU launcher (single source of argv)
-│   ├── m0_build.py             # bootconfig / initrd / GPT disk generator
+│   ├── m0_build.py             # bootconfig / initrd / GPT disk generator (pure-Python tools)
 │   ├── build_gfxstream_msvc.bat# MSVC/clang-cl gfxstream build (WIP, blocked)
-│   └── qemu-gfxstream/         # Custom QEMU 11 + gfxstream/rutabaga sources
+│   ├── qemu-gfxstream/         # Custom QEMU 11 + gfxstream/rutabaga sources
+│   │   └── patches/            # ★ the custom patches (tracked here; nested repos are gitlinks)
+│   └── env.json                # per-machine paths (gitignored, written by bootstrap_env.ps1)
 ├── aosp_cf_arm64_only_phone-img/  # Cuttlefish image + work/m0 artifacts (gitignored)
 ├── DECISION_LOG.md             # Full engineering decision history
 ├── GPU_PASSTHROUGH_DECISION.md # Honest GPU-passthrough assessment
 ├── docs/research/GPU_PASSTHROUGH_RETHOUGHT.md  # Deep dive into EGL/Vulkan paths
 └── README.md
 ```
+
+### How the repo stays reproducible
+
+The nested repos `tools/qemu-gfxstream/qemu` and `gfxstream` are **gitlinks**
+pinned to upstream commits. All local modifications (ExternalBlob
+`renderer-features` property, SDL color-format mapping, USB HID fix, gfxstream
+Windows bincompat + POSIX shim headers) live in
+`tools/qemu-gfxstream/patches/` and are applied by `apply_patches.ps1`
+(idempotent — re-running skips already-applied patches). A fresh clone gets
+the patches, the pure-Python build tools, and only needs the image + python +
+ADB + QEMU from outside the repo.
 
 ---
 

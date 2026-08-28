@@ -1,0 +1,161 @@
+diff --git a/hw/display/virtio-gpu-rutabaga.c b/hw/display/virtio-gpu-rutabaga.c
+index ebb6c78..9514beb 100644
+--- a/hw/display/virtio-gpu-rutabaga.c
++++ b/hw/display/virtio-gpu-rutabaga.c
+@@ -959,6 +959,7 @@ static bool virtio_gpu_rutabaga_init(VirtIOGPU *g, Error **errp)
+     vr->rutabaga = NULL;
+ 
+     builder.wsi = RUTABAGA_WSI_SURFACELESS;
++    builder.renderer_features = vr->renderer_features;
+     /*
+      * Currently, if WSI is specified, the only valid strings are "surfaceless"
+      * or "headless".  Surfaceless doesn't create a native window surface, but
+@@ -1107,6 +1108,7 @@ static const Property virtio_gpu_rutabaga_properties[] = {
+     DEFINE_PROP_STRING("wayland-socket-path", VirtIOGPURutabaga,
+                        wayland_socket_path),
+     DEFINE_PROP_STRING("wsi", VirtIOGPURutabaga, wsi),
++    DEFINE_PROP_STRING("renderer-features", VirtIOGPURutabaga, renderer_features),
+ };
+ 
+ static void virtio_gpu_rutabaga_class_init(ObjectClass *klass, const void *data)
+diff --git a/hw/input/hid.c b/hw/input/hid.c
+index de24cd0..3e01ce6 100644
+--- a/hw/input/hid.c
++++ b/hw/input/hid.c
+@@ -426,7 +426,10 @@ int hid_pointer_poll(HIDState *hs, uint8_t *buf, int len)
+             buf[l++] = dy >> 8;
+         }
+         if (len > l) {
+-            buf[l++] = dz;
++            /* ARM64: Tablet TipSwitch = left button. The HID descriptor
++             * maps this byte to BTN_TOUCH, so Android classes it as a
++             * touchscreen. Values 0 (up) / 1 (down). */
++            buf[l++] = (e->buttons_state & 0x01) != 0;
+         }
+         break;
+ 
+diff --git a/hw/usb/dev-hid.c b/hw/usb/dev-hid.c
+index ae19d60..87f45ef 100644
+--- a/hw/usb/dev-hid.c
++++ b/hw/usb/dev-hid.c
+@@ -510,15 +510,15 @@ static const uint8_t qemu_tablet_hid_report_descriptor[] = {
+     0x75, 0x10,		/*     Report Size (16) */
+     0x95, 0x02,		/*     Report Count (2) */
+     0x81, 0x02,		/*     Input (Data, Variable, Absolute) */
+-    0x05, 0x01,		/*     Usage Page (Generic Desktop) */
+-    0x09, 0x38,		/*     Usage (Wheel) */
+-    0x15, 0x81,		/*     Logical Minimum (-0x7f) */
+-    0x25, 0x7f,		/*     Logical Maximum (0x7f) */
+-    0x35, 0x00,		/*     Physical Minimum (same as logical) */
+-    0x45, 0x00,		/*     Physical Maximum (same as logical) */
+-    0x75, 0x08,		/*     Report Size (8) */
++    0x05, 0x0d,		/*     Usage Page (Digitizer) */
++    0x09, 0x42,		/*     Usage (Tip Switch) */
++    0x15, 0x00,		/*     Logical Minimum (0) */
++    0x25, 0x01,		/*     Logical Maximum (1) */
++    0x35, 0x00,		/*     Physical Minimum (0) */
++    0x45, 0x01,		/*     Physical Maximum (1) */
++    0x75, 0x08,		/*     Report Size (8) — kept 8 to stay byte-aligned */
+     0x95, 0x01,		/*     Report Count (1) */
+-    0x81, 0x06,		/*     Input (Data, Variable, Relative) */
++    0x81, 0x02,		/*     Input (Data, Variable, Absolute) */
+     0xc0,		/*   End Collection */
+     0xc0,		/* End Collection */
+ };
+diff --git a/include/hw/virtio/virtio-gpu-pixman.h b/include/hw/virtio/virtio-gpu-pixman.h
+index 4dba782..2788422 100644
+--- a/include/hw/virtio/virtio-gpu-pixman.h
++++ b/include/hw/virtio/virtio-gpu-pixman.h
+@@ -20,6 +20,7 @@
+ static inline pixman_format_code_t
+ virtio_gpu_get_pixman_format(uint32_t virtio_gpu_format)
+ {
++    fprintf(stderr, "VIRTGPU_COLOR_DEBUG: input format=%d\n", virtio_gpu_format);
+     switch (virtio_gpu_format) {
+     case VIRTIO_GPU_FORMAT_B8G8R8X8_UNORM:
+         return PIXMAN_BE_b8g8r8x8;
+diff --git a/include/hw/virtio/virtio-gpu.h b/include/hw/virtio/virtio-gpu.h
+index f69fc19..da289ca 100644
+--- a/include/hw/virtio/virtio-gpu.h
++++ b/include/hw/virtio/virtio-gpu.h
+@@ -294,6 +294,7 @@ struct VirtIOGPURutabaga {
+     uint64_t capset_mask;
+     char *wayland_socket_path;
+     char *wsi;
++    char *renderer_features;
+     bool headless;
+     uint32_t num_capsets;
+     struct rutabaga *rutabaga;
+diff --git a/ui/sdl2-2d.c b/ui/sdl2-2d.c
+index 7305238..09488b0 100644
+--- a/ui/sdl2-2d.c
++++ b/ui/sdl2-2d.c
+@@ -48,9 +48,37 @@ void sdl2_2d_update(DisplayChangeListener *dcl,
+     rect.w = w;
+     rect.h = h;
+ 
+-    SDL_UpdateTexture(scon->texture, &rect,
+-                      surface_data(surf) + surface_data_offset,
+-                      surface_stride(surf));
++    /* ARM64 LE: swap R/B bytes into a TEMP buffer before SDL upload.
++     * Only valid when surface bpp == 4 (XRGB/BGRA 32-bit layout).
++     * gfxstream-presented frames may use other formats/bpp, so gate
++     * on 4 bytes-per-pixel to avoid overrun/misinterpretation. */
++    if (surface_bytes_per_pixel(surf) == 4) {
++        static uint8_t *swap_buf = NULL;
++        static size_t swap_buf_size = 0;
++        size_t needed = (size_t)surface_stride(surf) * h;
++        if (!swap_buf || swap_buf_size < needed) {
++            free(swap_buf);
++            swap_buf = malloc(needed);
++            swap_buf_size = needed;
++        }
++        uint8_t *src = (uint8_t *)surface_data(surf) + surface_data_offset;
++        int stride = surface_stride(surf);
++        for (int yy = 0; yy < h; yy++) {
++            uint8_t *srow = src + yy * stride;
++            uint8_t *drow = swap_buf + yy * stride;
++            for (int xx = 0; xx < w; xx++) {
++                drow[xx*4+0] = srow[xx*4+2]; /* Blue from byte 2 */
++                drow[xx*4+1] = srow[xx*4+1]; /* Green stays */
++                drow[xx*4+2] = srow[xx*4+0]; /* Red from byte 0 */
++                drow[xx*4+3] = srow[xx*4+3]; /* Alpha/X stays */
++            }
++        }
++        SDL_UpdateTexture(scon->texture, &rect, swap_buf, stride);
++    } else {
++        SDL_UpdateTexture(scon->texture, &rect,
++                          surface_data(surf) + surface_data_offset,
++                          surface_stride(surf));
++    }
+     SDL_RenderClear(scon->real_renderer);
+     SDL_RenderCopy(scon->real_renderer, scon->texture, NULL, NULL);
+     SDL_RenderPresent(scon->real_renderer);
+@@ -102,7 +130,10 @@ void sdl2_2d_switch(DisplayChangeListener *dcl,
+         break;
+     case PIXMAN_a8b8g8r8:
+     case PIXMAN_x8b8g8r8:
+-        format = SDL_PIXELFORMAT_ABGR8888;
++        /* ARM64 LE FIX: pixman 0x20020888 (=x8b8g8r8 on LE) contains
++         * guest data B,G,R,A. ABGR8888 would read byte0 as Red (wrong).
++         * BGRA8888 reads byte0 as Blue (correct!) */
++        format = SDL_PIXELFORMAT_BGRA8888; fprintf(stderr, "CASE_HIT: a8b8g8r8/x8b8g8r8 -> BGRA\n");
+         break;
+     case PIXMAN_r8g8b8a8:
+     case PIXMAN_r8g8b8x8:
+@@ -112,11 +143,14 @@ void sdl2_2d_switch(DisplayChangeListener *dcl,
+         format = SDL_PIXELFORMAT_BGRX8888;
+         break;
+     case PIXMAN_b8g8r8a8:
+-        format = SDL_PIXELFORMAT_BGRA8888;
++        format = SDL_PIXELFORMAT_BGRA8888; fprintf(stderr, "CASE_HIT: a8b8g8r8/x8b8g8r8 -> BGRA\n");
+         break;
+     default:
+         g_assert_not_reached();
+     }
++    fprintf(stderr, "SDL_COLOR_DEBUG: pixman=0x%x -> sdl_format=0x%x (pixman_b8g8r8x8=%d)\n",
++                   (unsigned int)surface_format(scon->surface), (unsigned int)format,
++                   surface_format(scon->surface) == PIXMAN_b8g8r8x8);
+     scon->texture = SDL_CreateTexture(scon->real_renderer, format,
+                                       SDL_TEXTUREACCESS_STREAMING,
+                                       surface_width(new_surface),

@@ -52,3 +52,7 @@ Thumbs.db
 
 # J-Space session ledger (local tooling state)
 .jspace/
+
+# Per-machine environment (paths differ per clone host)
+tools/env.json
+.patchtest/
