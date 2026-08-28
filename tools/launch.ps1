@@ -165,9 +165,11 @@ function Build-QemuArgs {
     # Kernel cmdline (canonical - matches init_wrapper expectations:
     # 4 UARTs, quiet console, binder rust impl, firmware from vendor/etc)
     # video=virtio-fb:1280x800@60 tells guest kernel framebuffer matches virtio-gpu device
+    # androidboot.lcd_density=240 sets display density before SurfaceFlinger starts (hdpi for 1280x800)
     $append = "console=ttyAMA0 earlycon=pl011,0x9000000 quiet loglevel=0 " +
               "printk.devkmsg=on audit=0 panic=-1 8250.nr_uarts=4 " +
               "video=virtio-fb:1280x800@60 " +
+              "androidboot.lcd_density=240 " +
               "androidboot.hardware.gltransport=virtio-gpu-pipe binder.impl=rust cma=0 firmware_class.path=/vendor/etc/ " +
               "loop.max_part=7 init=/init bootconfig"
     # Optional gralloc override (e.g. 'default' fixes R/B-swap on plain
