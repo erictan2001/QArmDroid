@@ -96,7 +96,14 @@ function Get-QemuDisplayCaps {
     foreach ($line in ($help -split "`n")) {
         if ($line -match '^\s*([a-z][a-z0-9-]+)\s*$') { $types += $Matches[1] }
     }
-    if ($types.Count -eq 0) { $arr = @("none") }   # custom minimal build
+    # QEMU's -display help does NOT list 'vnc' even when VNC is compiled in
+    # (VNC is registered as a display backend at runtime differently from
+    # sdl/gtk). Detect it via the legacy -vnc option instead.
+    if ($types.Count -eq 0) { $types = @("none") }   # custom minimal build
+    if ((-not $types.Contains("vnc"))) {
+        $vncHelp = (& $Exe -vnc help 2>&1 | Out-String)
+        if ($vncHelp -match "vnc|display") { $types += "vnc" }
+    }
     return $types
 }
 

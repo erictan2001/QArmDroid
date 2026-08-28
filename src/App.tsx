@@ -23,10 +23,10 @@ export function App() {
     boot_completed: false,
     scrcpy_running: false,
   });
-  const [displayMode, setDisplayMode] = useState<"scrcpy" | "embedded" | "sdl">("scrcpy");
+  const [displayMode, setDisplayMode] = useState<"scrcpy" | "embedded" | "sdl">("embedded");
   const [connecting, setConnecting] = useState<boolean>(false);
   const [connected, setConnected] = useState<boolean>(false);
-  const [logMsg, setLogMsg] = useState<string>("System idle. Click 'Launch Emulator' to start.");
+  const [logMsg, setLogMsg] = useState<string>("QArmDroid ready. Click 'Launch Emulator' to start Android 16.");
   const [colorMode, setColorMode] = useState<"direct" | "bgr" | "brg" | "gbr" | "fix_rby">("direct");
   const [inputText, setInputText] = useState("");
   const [touchFeedback, setTouchFeedback] = useState<{ x: number; y: number; visible: boolean }>({
@@ -267,7 +267,7 @@ export function App() {
       <header className="top-header">
         <div className="brand">
           <span className="brand-logo">🤖</span>
-          <h2>Android 16 ARM64</h2>
+          <h2>QArmDroid</h2>
           <span
             className={`status-pill ${
               status.scrcpy_running || connected || (status.running && displayMode === "sdl")
@@ -286,7 +286,7 @@ export function App() {
               : status.running && status.boot_completed
               ? "● Boot Completed — Attaching Display..."
               : status.running
-              ? "● Booting VM (t ~ 35s)..."
+              ? "● Booting VM (WHPX)..."
               : "○ Stopped"}
           </span>
         </div>

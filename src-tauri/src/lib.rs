@@ -170,13 +170,7 @@ fn find_repo_root() -> Result<PathBuf, String> {
         }
     }
 
-    // 3. Absolute known path fallback
-    let fallback = PathBuf::from(r"C:\Users\erict\OneDrive\Desktop\Arm64AndroidEmulator");
-    if fallback.join("tools").join("launch.ps1").exists() {
-        return Ok(fallback);
-    }
-
-    Err("Could not find repository root containing tools\\launch.ps1".to_string())
+    Err("Could not find repository root containing tools\\launch.ps1 (run the app from the QArmDroid repo or with the .exe inside it)".to_string())
 }
 
 #[tauri::command]
@@ -187,7 +181,10 @@ fn start_emulator(display_mode: Option<String>) -> Result<String, String> {
 
     let repo_root = find_repo_root()?;
     let launch_script = repo_root.join("tools").join("launch.ps1");
-    let mode = display_mode.unwrap_or_else(|| "scrcpy".to_string());
+    // Default to embedded (VNC websocket into the Tauri window). The custom
+    // QArmDroid QEMU is built with VNC enabled; the display streams over
+    // ws://127.0.0.1:5901 into the noVNC canvas.
+    let mode = display_mode.unwrap_or_else(|| "embedded".to_string());
     let qemu_mode = match mode.as_str() {
         "scrcpy" => "none",
         "embedded" => "embedded",
