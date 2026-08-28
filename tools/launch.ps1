@@ -164,8 +164,10 @@ function Build-QemuArgs {
 
     # Kernel cmdline (canonical - matches init_wrapper expectations:
     # 4 UARTs, quiet console, binder rust impl, firmware from vendor/etc)
+    # video=virtio-fb:1280x800@60 tells guest kernel framebuffer matches virtio-gpu device
     $append = "console=ttyAMA0 earlycon=pl011,0x9000000 quiet loglevel=0 " +
               "printk.devkmsg=on audit=0 panic=-1 8250.nr_uarts=4 " +
+              "video=virtio-fb:1280x800@60 " +
               "androidboot.hardware.gltransport=virtio-gpu-pipe binder.impl=rust cma=0 firmware_class.path=/vendor/etc/ " +
               "loop.max_part=7 init=/init bootconfig"
     # Optional gralloc override (e.g. 'default' fixes R/B-swap on plain
@@ -194,7 +196,7 @@ function Build-QemuArgs {
         'basic' {
             $gpu = @("-device", "virtio-gpu-pci,xres=1280,yres=800") }
         default {   # gfxstream (hostmem required for blob mapping!)
-            $gpu = @("-device", "virtio-gpu-rutabaga-pci,addr=03.0,gfxstream-vulkan=on,hostmem=8G,xres=1280,yres=800") }
+            $gpu = @("-device", "virtio-gpu-rutabaga-pci,addr=03.0,gfxstream-vulkan=on,hostmem=8G,xres=1280,yres=800,renderer-features=ExternalBlob:enabled") }
     }
 
     $inputDev = @()
@@ -269,7 +271,8 @@ Start-Job -ScriptBlock {
         Start-Sleep -Seconds 2
         $s = & "C:\platform-tools\adb.exe" -s 127.0.0.1:5555 shell getprop sys.boot_completed 2>$null
     } until ($s -match "1")
-    & "C:\platform-tools\adb.exe" -s 127.0.0.1:5555 shell "setprop ctl.stop seriallogging; setprop ctl.stop console; dmesg -n 1; wm size 1280x800; settings put global window_animation_scale 0.5; settings put global transition_animation_scale 0.5; settings put global animator_duration_scale 0.5" 2>$null
+    # Set both size AND density to match 1280x800 display (hdpi ~240 for tablet)
+    & "C:\platform-tools\adb.exe" -s 127.0.0.1:5555 shell "setprop ctl.stop seriallogging; setprop ctl.stop console; dmesg -n 1; wm size 1280x800; wm density 240; settings put global window_animation_scale 0.5; settings put global transition_animation_scale 0.5; settings put global animator_duration_scale 0.5" 2>$null
 } | Out-Null
 
 Write-Host "==========================================================" -ForegroundColor Cyan
