@@ -1481,3 +1481,49 @@ QEMU rebuild completed successfully. QEMU binary built at `tools/qemu-gfxstream/
 **Current Working Configuration**: 
 - **SDL + basic mode** (SwiftShader) - fully functional with colors, touch, audio
 - **gfxstream/ranchu** - blocked on MinGW GL interop limitation
+
+---
+## ROUND 17: Reproducibility + History Cleanup
+
+### A. Clone → working reproduce pipeline (commit 915447f)
+
+Made the repo reproducible from a fresh clone with **pure-Python tooling**:
+
+- `tools/imgtools.py` — pure-Python LZ4 (legacy+standard frames), Android
+  sparse unsparse, cpio newc extract. Validated byte-identical vs
+  `lz4.exe`/`simg2img.exe` on real ramdisks + the 8.6 GB `super.img`.
+- `tools/setup_image.ps1` — unpacks the CF image zip (init_boot/vendor_boot
+  ramdisks) with imgtools — no busybox cpio, no lz4.exe.
+- `tools/bootstrap_env.ps1` — detects python/adb/qemu → `tools/env.json`
+  (machine-independent, gitignored).
+- `tools/apply_patches.ps1` — applies the custom QEMU/gfxstream patches
+  (ExternalBlob renderer-features, SDL color mapping, HID fix, gfxstream
+  Windows bincompat + POSIX shims) to fresh nested clones; idempotent.
+- `tools/qemu-gfxstream/patches/` — the previously-uncommitted working-tree
+  changes of the nested gitlink repos, now tracked (verified to apply with
+  `git apply --ignore-space-change` on fresh clones).
+- `reproduce.ps1` — full orchestration (env → patches → image → bootconfig →
+  initrd → disk → launch → watchdog), with the bootconfig-order regression
+  guard (lcd_density=240).
+
+### B. Git history cleanup (filter-repo, commit 5df418b)
+
+**Removed 1131 build-artifact files from ALL history** using
+`git-filter-repo --invert-paths` on `main`+`dev`+backup branches:
+
+- `pysite/` (883 pip-cache files), `bin/` (176 busybox applets), `arch-pkg/`,
+  `rutabaga-prefix/`, `gfxstream-install/`, `turnip/` (Mesa .so), `downloads/`,
+  `ninja-test/`, `_ctxinit_debug/`, `scrcpy/`, `work_sdk/`, `research/artifacts/`.
+
+Result: `.git` **844 MB → 80.4 MB** (after `gc --prune=now --aggressive`),
+zero unreachable objects, 301 files tracked.
+
+**Files remain on disk**: after the rewrite, the artifact files were restored
+from a pre-rewrite backup bundle (`.backup-history.bundle`, 119 MB) via
+`git archive` + `tar -xf`, so the local build environment keeps every file —
+they are now tracked=0 and covered by `.gitignore`.
+
+**Safety**: backup bundle `.backup-history.bundle` (all branches, pre-rewrite)
+is kept in the repo root (gitignored). All commit SHAs changed; the repo has
+no remote, so only this clone is affected. To restore pre-rewrite history at
+any time: `git fetch .backup-history.bundle 'refs/heads/*:refs/pre/*'`.
