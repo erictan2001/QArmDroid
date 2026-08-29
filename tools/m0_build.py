@@ -22,6 +22,15 @@ MSYS_BIN = r"C:\msys64\clangarm64\bin"
 sys.path.insert(0, os.path.join(ROOT, "tools"))
 import imgtools
 LZ4 = os.path.join(MSYS_BIN, "lz4.exe")      # optional fallback only
+
+# Overridable for bundled (installed) deployment: the installer stages the
+# image inputs + pure-Python tools at bundle paths and runs
+# `python m0_build.py disk QARM_BUNDLE=<dir>` to build disk.raw there.
+if len(sys.argv) >= 3 and sys.argv[2].startswith("QARM_BUNDLE="):
+    BUNDLE = sys.argv[2].split("=", 1)[1]
+    IMG = os.path.join(BUNDLE, "image")       # super.img, boot.img, ... here
+    WORK = os.path.join(BUNDLE, "image")      # disk.raw lands next to inputs
+    sys.path.insert(0, os.path.join(BUNDLE, "tools"))  # imgtools.py from bundle
 SIMG2IMG = os.path.join(MSYS_BIN, "simg2img.exe")  # optional fallback only
 
 DISK_NAME = "disk.raw"

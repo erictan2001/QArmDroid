@@ -210,7 +210,28 @@ fn build_packet(cmd: u8, x1: u16, y1: u16, x2: u16, y2: u16, dur: u16) -> [u8; 1
 }
 
 fn find_repo_root() -> Result<PathBuf, String> {
-    // 1. Check CWD and walk upward
+    // 1. Bundled (installed) deployment: resources\qemu\qemu-system-aarch64.exe
+    //    sits next to the exe under <install>\resources\qemu\. The app also
+    //    provisions a writable runtime under %LOCALAPPDATA%\QArmDroid; prefer
+    //    that once it exists (it holds launch.ps1 + image/disk.raw).
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            let bundled_res = dir.join("resources");
+            if bundled_res.join("qemu").join("qemu-system-aarch64.exe").exists() {
+                // Provisioned runtime (first run copies + builds disk.raw).
+                let rt = std::env::var("LOCALAPPDATA")
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|_| bundled_res.clone());
+                let rt = rt.join("QArmDroid");
+                if rt.join("tools").join("launch.ps1").exists() {
+                    return Ok(rt);
+                }
+                return Ok(bundled_res);
+            }
+        }
+    }
+
+    // 1b. Check CWD and walk upward
     if let Ok(cwd) = std::env::current_dir() {
         let mut curr = cwd.clone();
         for _ in 0..5 {
@@ -223,7 +244,7 @@ fn find_repo_root() -> Result<PathBuf, String> {
         }
     }
 
-    // 2. Check EXE directory and walk upward
+    // 2. Check EXE directory and walk upward (dev: exe inside repo)
     if let Ok(exe) = std::env::current_exe() {
         let mut curr = exe.clone();
         for _ in 0..6 {
@@ -236,7 +257,7 @@ fn find_repo_root() -> Result<PathBuf, String> {
         }
     }
 
-    Err("Could not find repository root containing tools\\launch.ps1 (run the app from the QArmDroid repo or with the .exe inside it)".to_string())
+    Err("Could not find repository root (repo with tools\\launch.ps1, or bundled resources\\qemu).".to_string())
 }
 
 #[tauri::command]
@@ -246,6 +267,18 @@ fn start_emulator(display_mode: Option<String>) -> Result<String, String> {
     }
 
     let repo_root = find_repo_root()?;
+
+    // Bundled install: resources\qemu\qemu-system-aarch64.exe exists next to
+    // the exe. `inst_resources` = the immutable installer resources dir (where
+    // provision_bundle.ps1 and the QEMU/image inputs were staged). After
+    // provisioning, find_repo_root() prefers %LOCALAPPDATA%\QArmDroid, so keep
+    // the install resources dir separately for -InstallRoot.
+    let inst_resources = std::env::current_exe()
+        .ok()
+        .and_then(|e| e.parent().map(|d| d.join("resources")))
+        .filter(|r| r.join("qemu").join("qemu-system-aarch64.exe").exists());
+    let bundled = inst_resources.is_some();
+
     let launch_script = repo_root.join("tools").join("launch.ps1");
     // Default to embedded (VNC websocket into the Tauri window). The custom
     // QArmDroid QEMU is built with VNC enabled; the display streams over
@@ -262,17 +295,42 @@ fn start_emulator(display_mode: Option<String>) -> Result<String, String> {
         .to_str()
         .ok_or_else(|| "Failed to convert script path to string".to_string())?;
 
+    // Provision on first run of a bundled install (copies QEMU/image, builds
+    // disk.raw into %LOCALAPPDATA%\QArmDroid). In a dev repo this is a no-op
+    // because the provision script detects missing bundle resources.
+    let provision = repo_root.join("tools").join("provision_bundle.ps1");
+    if bundled {
+        if let Some(inst) = &inst_resources {
+            if provision.exists() {
+                let _ = run_with_timeout(
+                    silent_command("powershell.exe")
+                        .current_dir(&repo_root)
+                        .args(&["-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
+                                provision.to_str().unwrap(),
+                                "-InstallRoot", inst.to_str().unwrap()]),
+                    Duration::from_secs(1800), // disk.raw build can take ~15 min
+                );
+            }
+        }
+    }
+
+    let mut args = vec![
+        "-NoProfile".to_string(),
+        "-ExecutionPolicy".to_string(),
+        "Bypass".to_string(),
+        "-File".to_string(),
+        script_str.to_string(),
+        "-DisplayMode".to_string(),
+        qemu_mode.to_string(),
+    ];
+    if bundled {
+        args.push("-BundleRoot".to_string());
+        args.push(repo_root.to_str().unwrap_or("").to_string());
+    }
+
     match silent_command("powershell.exe")
         .current_dir(&repo_root)
-        .args(&[
-            "-NoProfile",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-File",
-            script_str,
-            "-DisplayMode",
-            qemu_mode,
-        ])
+        .args(&args)
         .spawn()
     {
         Ok(_) => Ok(format!("Emulator launched in '{}' display mode.", mode)),

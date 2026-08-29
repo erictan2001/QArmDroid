@@ -57,6 +57,9 @@ Thumbs.db
 tools/env.json
 .patchtest/
 
+# Tauri installer staging (built by tools/stage_bundle.ps1; ~1.7 GB)
+src-tauri/resources/
+
 # Build artifacts & tool downloads (history-cleaned; keep locally only)
 # These were removed from git history (see DECISION_LOG); they remain on
 # disk for the local build environment but must never be re-committed.

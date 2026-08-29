@@ -127,3 +127,40 @@ npx tauri build          # sets release/embed correctly, produces .msi/.exe
 The built exe embeds `dist/` (verified: contains `index-D-Zj8LYJ.js`,
 loads from `tauri.localhost`). To confirm a build is release-embedded, the
 exe must NOT load `localhost:1420` when launched without the dev server.
+
+### Self-contained installer (custom QEMU + Android image bundled)
+
+The installer is **self-contained**: it bundles the custom VNC-enabled QEMU
+(+ runtime DLLs), the Android kernel + initrd + boot images + super.img, and
+the pure-Python build tools. The 16 GB `disk.raw` is NOT shipped; the app
+rebuilds it on first launch into `%LOCALAPPDATA%\QArmDroid` from the
+bundled ~1.5 GB `super.img`.
+
+Build steps (in order):
+
+```
+# 1. stage resources (~1.7 GB) into src-tauri\resources\
+powershell -File tools\stage_bundle.ps1
+
+# 2. build the ARM64 installer (aarch64 host → arm64 packages)
+npx tauri build -t aarch64-pc-windows-msvc
+```
+
+Outputs (ARM64 — `PE machine 0xAA64`):
+- `src-tauri\target\aarch64-pc-windows-msvc\release\bundle\msi\QArmDroid_0.1.0_arm64_en-US.msi`
+- `src-tauri\target\aarch64-pc-windows-msvc\release\bundle\nsis\QArmDroid_0.1.0_arm64-setup.exe`
+
+**Why `-t aarch64-pc-windows-msvc`?** Without it the bundler labels the
+installer `x64` even though the exe is arm64 (the host triple defaults
+mismatch the bundle arch detection). Always pass the explicit arm64 target.
+
+Runtime layout after install:
+- `resources\qemu\qemu-system-aarch64.exe` + DLLs (read-only install dir)
+- `resources\image\kernel|initrd.img|super.img|...` (inputs)
+- `resources\tools\launch.ps1|provision_bundle.ps1|m0_build.py|imgtools.py`
+- `%LOCALAPPDATA%\QArmDroid\` (provisioned: qemu copy, kernel, initrd,
+  disk.raw built on first run)
+
+`provision_bundle.ps1` = first-run sync + disk.raw build;
+`launch.ps1 -BundleRoot <rt>` = resolve QEMU/image/disk from the runtime dir
+instead of the source-repo layout.

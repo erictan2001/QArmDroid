@@ -45,21 +45,38 @@ param(
     [switch]$PrintArgs,
     [int]$MonitorPort = 0,
     [string]$GrallockOverride = '',
-    [switch]$SdlGl
+    [switch]$SdlGl,
+    # Bundled (installed) deployment root. When set, the QEMU binary, its
+    # runtime DLLs, the kernel/initrd/disk, and adb are resolved under
+    # <BundleRoot>\qemu\... / <BundleRoot>\image\... / <BundleRoot>\tools\
+    # instead of the source-repo layout. The Tauri installer passes its
+    # resource dir here.
+    [string]$BundleRoot = ""
 )
 
 # ------------------------------------------------------------------ PATH ----
 # The custom QEMU links against MSYS2 runtime DLLs (glib-2.0-0.dll, pixman,
-# pcre2, zstd, ...) living in C:\msys64\clangarm64\bin, plus the gfxstream
-# backend DLLs. None of these are on a default user/system PATH, so a GUI
-# spawn gets STATUS_DLL_NOT_FOUND (0xC0000135) and QEMU dies sub-second with
-# no output. Bootstrap PATH here so launch works from ANY environment.
+# pcre2, zstd, ...). In the source repo they live in C:\msys64\clangarm64\bin;
+# in the bundled installer they sit beside the QEMU exe. Bootstrap PATH here
+# so launch works from ANY environment.
 $RepoRoot = (Resolve-Path "$PSScriptRoot\..").Path
 $GfxDir   = Join-Path $RepoRoot "tools\qemu-gfxstream"
-if (-not $QemuPath) { $QemuPath = Join-Path $GfxDir "qemu\build\qemu-system-aarch64.exe" }
 
-$pathAdditions = @("C:\msys64\clangarm64\bin")
-if ($GpuMode -eq "gfxstream") {
+if ($BundleRoot) {
+    # Installed (bundled) layout:
+    #   <bundle>\qemu\qemu-system-aarch64.exe + runtime DLLs beside it
+    #   <bundle>\image\kernel, initrd.img, disk.raw
+    #   <bundle>\tools\ (metric/docs; launch.ps1 itself lives here too)
+    $QemuDir = Join-Path $BundleRoot "qemu"
+    if (-not $QemuPath) { $QemuPath = Join-Path $QemuDir "qemu-system-aarch64.exe" }
+    $pathAdditions = @($QemuDir)
+}
+else {
+    if (-not $QemuPath) { $QemuPath = Join-Path $GfxDir "qemu\build\qemu-system-aarch64.exe" }
+    $pathAdditions = @("C:\msys64\clangarm64\bin")
+}
+
+if ($GpuMode -eq "gfxstream" -and -not $BundleRoot) {
     $pathAdditions += @(
         (Join-Path $GfxDir "gfxstream\build-host"),
         (Join-Path $GfxDir "gfxstream\build-host\host")
@@ -139,9 +156,15 @@ if ($reqType -ne "none" -and $caps -notcontains $reqType) {
 $ErrorActionPreference = "Continue"   # never Stop: PS5.1 + native stderr = instant death
 if ($Headless) { $DisplayMode = "none" }
 
-$ImgDir    = Join-Path $RepoRoot "aosp_cf_arm64_only_phone-img"
-$M0Dir     = Join-Path $ImgDir "work\m0"
+if ($BundleRoot) {
+    $ImgDir     = Join-Path $BundleRoot "image"
+    $M0Dir      = $ImgDir        # bundled: kernel/initrd/disk live flat under image\
+} else {
+    $ImgDir    = Join-Path $RepoRoot "aosp_cf_arm64_only_phone-img"
+    $M0Dir     = Join-Path $ImgDir "work\m0"
+}
 $KernelPath = Join-Path $ImgDir "out\kernel"
+if ($BundleRoot) { $KernelPath = Join-Path $ImgDir "kernel" }
 # initrd selection by GPU mode:
 #  - basic / SwiftShader: use the ORIGINAL initrd.img (pastel/angle config)
 #  - gfxstream (ranchu):  use initrd_gpu.img (vulkan=ranchu passthrough config)
