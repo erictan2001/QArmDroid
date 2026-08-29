@@ -61,9 +61,9 @@ tools\launch.ps1 -PrintArgs
 
 ## GPU modes
 
-- `-GpuMode gfxstream` (default): repo-local custom QEMU with virtio-gpu-rutabaga.
+- `-GpuMode basic` (default): plain virtio-gpu-pci; also works with the stock
+  msys2 QEMU via `-QemuPath C:\msys64\clangarm64\bin\qemu-system-aarch64.exe`.
+- `-GpuMode gfxstream`: repo-local custom QEMU with virtio-gpu-rutabaga.
   In-guest acceleration still blocked on Qualcomm shipping
   VK_KHR_external_memory_win32 — falls back to SwiftShader (~10 fps).
-- `-GpuMode basic`: plain virtio-gpu-pci; also works with the stock
-  msys2 QEMU via `-QemuPath C:\msys64\clangarm64\bin\qemu-system-aarch64.exe`.
 

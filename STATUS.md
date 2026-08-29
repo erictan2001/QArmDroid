@@ -32,7 +32,7 @@ extension but **not** the win32 handle type, so cross-process GPU buffer
 sharing fails and gfxstream falls back to non-accelerated mode.
 Evidence: `research/docs/vulkaninfo-adreno-x1-85-driver-0.855.json`.
 When Qualcomm ships the handle type, no code changes should be needed:
-boot with default `-GpuMode gfxstream`.
+boot with `-GpuMode gfxstream` (default is `basic`).
 
 ## Canonical launch
 

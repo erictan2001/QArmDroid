@@ -15,11 +15,12 @@
     Default: scrcpy (=none).
 
 .PARAMETER GpuMode
-    gfxstream -> virtio-gpu-rutabaga-pci,gfxstream-vulkan=on (default; needs
-                 the repo-local custom QEMU and a host Vulkan driver with
+    basic     -> plain virtio-gpu-pci (default; works on any QEMU incl. msys2
+                 stock and the repo-local custom build).
+    gfxstream -> virtio-gpu-rutabaga-pci,gfxstream-vulkan=on (needs the
+                 repo-local custom QEMU and a host Vulkan driver with
                  VK_KHR_external_memory_win32 to fully accelerate - falls
                  back to SwiftShader in-guest until Qualcomm ships it).
-    basic     -> plain virtio-gpu-pci (works on any QEMU incl. msys2 stock).
 
 .PARAMETER Memory / Cores
     Guest RAM (default 6G) and vCPU count (default 6).
@@ -36,7 +37,7 @@
 [CmdletBinding()]
 param(
     [string]$DisplayMode = "scrcpy",
-    [string]$GpuMode = "gfxstream",
+    [string]$GpuMode = "basic",
     [string]$Memory = "6G",
     [int]$Cores = 6,
     [string]$QemuPath = "",
