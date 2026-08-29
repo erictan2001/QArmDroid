@@ -27,7 +27,6 @@ export function App() {
   const [connecting, setConnecting] = useState<boolean>(false);
   const [connected, setConnected] = useState<boolean>(false);
   const [logMsg, setLogMsg] = useState<string>("QArmDroid ready. Click 'Launch Emulator' to start Android 16.");
-  const [colorMode, setColorMode] = useState<"direct" | "bgr" | "brg" | "gbr" | "fix_rby">("gbr");
   const [inputText, setInputText] = useState("");
   const [touchFeedback, setTouchFeedback] = useState<{ x: number; y: number; visible: boolean }>({
     x: 0,
@@ -121,17 +120,6 @@ export function App() {
   };
 
   const [optimized, setOptimized] = useState(false);
-
-  // Auto-correct color mode per display backend. The VNC/embedded framebuffer
-  // arrives with GBR channel order (verified empirically); SDL shows native
-  // colors after the QEMU sdl2-2d.c colour-fix, so it needs no filter.
-  useEffect(() => {
-    if (displayMode === "embedded") {
-      setColorMode("gbr");
-    } else if (displayMode === "sdl") {
-      setColorMode("direct");
-    }
-  }, [displayMode]);
 
   // Auto-connect when VNC port becomes ready in embedded mode
   useEffect(() => {
@@ -374,51 +362,11 @@ export function App() {
               🔄 Reconnect Screen
             </button>
           )}
-
-          {displayMode === "embedded" && (
-            <div className="color-control-group">
-              <span className="color-label">Color:</span>
-              <button
-                className={`btn btn-sm ${colorMode === "direct" ? "btn-active" : "btn-secondary"}`}
-                onClick={() => setColorMode("direct")}
-                title="Direct native sRGB (no filter)"
-              >
-                Native
-              </button>
-              <button
-                className={`btn btn-sm ${colorMode === "bgr" ? "btn-active" : "btn-secondary"}`}
-                onClick={() => setColorMode("bgr")}
-                title="Swap Red and Blue (BGR)"
-              >
-                BGR
-              </button>
-              <button
-                className={`btn btn-sm ${colorMode === "brg" ? "btn-active" : "btn-secondary"}`}
-                onClick={() => setColorMode("brg")}
-                title="BRG Channel Permutation"
-              >
-                BRG
-              </button>
-              <button
-                className={`btn btn-sm ${colorMode === "gbr" ? "btn-active" : "btn-secondary"}`}
-                onClick={() => setColorMode("gbr")}
-                title="GBR Channel Permutation"
-              >
-                GBR
-              </button>
-              <button
-                className={`btn btn-sm ${colorMode === "fix_rby" ? "btn-active" : "btn-secondary"}`}
-                onClick={() => setColorMode("fix_rby")}
-                title="Color Sequence Inversion (Red->Blue, Blue->Yellow, Yellow->Red)"
-              >
-                R-B-Y Fix
-              </button>
-            </div>
-          )}
         </div>
       </header>
 
-      {/* Hardware-accelerated SVG color filters for instant GPU channel correction */}
+      {/* Hardware-accelerated SVG color filter: the embedded VNC framebuffer
+          arrives with swapped R/B channels, so always apply the BGR swap. */}
       <svg style={{ position: "absolute", width: 0, height: 0, pointerEvents: "none" }} aria-hidden="true">
         <filter id="bgr-swap" colorInterpolationFilters="sRGB">
           <feColorMatrix
@@ -429,39 +377,12 @@ export function App() {
                     0 0 0 1 0"
           />
         </filter>
-        <filter id="brg-swap" colorInterpolationFilters="sRGB">
-          <feColorMatrix
-            type="matrix"
-            values="0 0 1 0 0
-                    1 0 0 0 0
-                    0 1 0 0 0
-                    0 0 0 1 0"
-          />
-        </filter>
-        <filter id="gbr-swap" colorInterpolationFilters="sRGB">
-          <feColorMatrix
-            type="matrix"
-            values="0 1 0 0 0
-                    0 0 1 0 0
-                    1 0 0 0 0
-                    0 0 0 1 0"
-          />
-        </filter>
-        <filter id="fix-rby-swap" colorInterpolationFilters="sRGB">
-          <feColorMatrix
-            type="matrix"
-            values="0  0 1 0 0
-                    1 -1 0 0 0
-                    0  1 0 0 0
-                    0  0 0 1 0"
-          />
-        </filter>
       </svg>
 
       {/* Main Workspace: Screen Viewport + Android Control Bar */}
       <main className="main-viewport">
         <div
-          className={`screen-wrapper color-mode-${colorMode}`}
+          className={`screen-wrapper ${displayMode === "embedded" ? "color-mode-bgr" : ""}`}
           onPointerDown={handlePointerDown}
           onPointerMove={handlePointerMove}
           onPointerUp={handlePointerUp}

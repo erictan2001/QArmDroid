@@ -248,25 +248,10 @@ body, html, #root {
   transition: filter 0.15s ease;
 }
 
-/* Zero-cost GPU hardware color matrix options */
-.color-mode-direct .vnc-canvas-container canvas {
-  filter: none;
-}
-
+/* Zero-cost GPU hardware color filter: embedded VNC framebuffer has swapped
+   R/B channels, so the BGR swap is applied whenever embedded mode is active. */
 .color-mode-bgr .vnc-canvas-container canvas {
   filter: url(#bgr-swap);
-}
-
-.color-mode-brg .vnc-canvas-container canvas {
-  filter: url(#brg-swap);
-}
-
-.color-mode-gbr .vnc-canvas-container canvas {
-  filter: url(#gbr-swap);
-}
-
-.color-mode-fix_rby .vnc-canvas-container canvas {
-  filter: url(#fix-rby-swap);
 }
 
 /* Touch feedback ripple */
