@@ -27,7 +27,7 @@ export function App() {
   const [connecting, setConnecting] = useState<boolean>(false);
   const [connected, setConnected] = useState<boolean>(false);
   const [logMsg, setLogMsg] = useState<string>("QArmDroid ready. Click 'Launch Emulator' to start Android 16.");
-  const [colorMode, setColorMode] = useState<"direct" | "bgr" | "brg" | "gbr" | "fix_rby">("direct");
+  const [colorMode, setColorMode] = useState<"direct" | "bgr" | "brg" | "gbr" | "fix_rby">("gbr");
   const [inputText, setInputText] = useState("");
   const [touchFeedback, setTouchFeedback] = useState<{ x: number; y: number; visible: boolean }>({
     x: 0,
@@ -87,13 +87,18 @@ export function App() {
       rfb.resizeSession = false;
       rfb.clipViewport = false;
       rfb.focusOnClick = true;
-      rfb.viewOnly = true;        // Touch/Mouse events handled directly with sub-millisecond precision
+      // viewOnly=false: noVNC sends pointer/keyboard events over VNC to
+      // QEMU's USB HID devices (usb-tablet/usb-kbd attached in embedded
+      // mode). This is the RELIABLE input path and needs no guest daemon.
+      // (The old viewOnly=true + custom touch daemon silently did nothing
+      // when the daemon wasn't deployed -> touch appeared broken.)
+      rfb.viewOnly = false;
       rfb.background = "#0f172a";
 
       rfb.addEventListener("connect", () => {
         setConnecting(false);
         setConnected(true);
-        setLogMsg("Connected to Android display (1:1 Direct Touch Active)");
+        setLogMsg("Connected to Android display — VNC input active");
       });
 
       rfb.addEventListener("disconnect", (e: any) => {
@@ -116,6 +121,17 @@ export function App() {
   };
 
   const [optimized, setOptimized] = useState(false);
+
+  // Auto-correct color mode per display backend. The VNC/embedded framebuffer
+  // arrives with GBR channel order (verified empirically); SDL shows native
+  // colors after the QEMU sdl2-2d.c colour-fix, so it needs no filter.
+  useEffect(() => {
+    if (displayMode === "embedded") {
+      setColorMode("gbr");
+    } else if (displayMode === "sdl") {
+      setColorMode("direct");
+    }
+  }, [displayMode]);
 
   // Auto-connect when VNC port becomes ready in embedded mode
   useEffect(() => {
@@ -165,6 +181,10 @@ export function App() {
   }, []);
 
   const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    // Embedded mode: noVNC (viewOnly=false) relays pointer events over VNC
+    // to the guest's USB tablet. Do NOT also dispatch via the touch daemon
+    // (would double-input). The daemon handlers are only for SDL/scrcpy.
+    if (displayMode === "embedded" && connected) return;
     if (!connected || e.button !== 0) return;
     const coords = getGuestCoords(e.clientX, e.clientY);
     if (!coords) return;
@@ -179,6 +199,7 @@ export function App() {
   };
 
   const handlePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (displayMode === "embedded" && connected) return;
     if (!isPointerDownRef.current) return;
     const coords = getGuestCoords(e.clientX, e.clientY);
     if (!coords) return;
@@ -188,6 +209,7 @@ export function App() {
   };
 
   const handlePointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (displayMode === "embedded" && connected) return;
     if (!isPointerDownRef.current) return;
     isPointerDownRef.current = false;
     setTouchFeedback((prev) => ({ ...prev, visible: false }));
@@ -204,6 +226,9 @@ export function App() {
 
   const handleContextMenu = (e: React.MouseEvent) => {
     e.preventDefault();
+    // Embedded mode: noVNC forwards mouse buttons over VNC to the guest,
+    // so right-click reaches Android natively; no extra Back key needed.
+    if (displayMode === "embedded" && connected) return;
     // Right-click triggers Android Back button
     sendKey("4");
   };
