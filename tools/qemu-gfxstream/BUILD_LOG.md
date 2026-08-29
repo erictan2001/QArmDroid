@@ -57,3 +57,57 @@
 qemu-system-aarch64.exe -device help | findstr rutabaga   # expect virtio-gpu-rutabaga(-pci)
 qemu-system-aarch64.exe -object help | findstr rutabaga   # expect rutabaga object
 ```
+
+## VNC display support (for the Tauri embedded window) — 2026-08-29
+
+The Tauri app embeds the Android display via noVNC → QEMU's VNC **websocket**
+(`ws://127.0.0.1:5901`). Stock QEMU builds omit VNC; the custom build needs:
+
+### Why `-display help` lies
+QEMU's `-display help` lists `none`/`sdl`/`gtk`/... but **never `vnc`**, even
+when VNC is compiled in (VNC is registered via the legacy `-vnc` option path).
+Detect it with `qemu-system-aarch64.exe -vnc help` (prints "vnc options:...").
+`tools/launch.ps1`'s `Get-QemuDisplayCaps` uses `-vnc help` to probe.
+
+### Reconfigure (after the initial build completed)
+```
+set PATH=...\tools\qemu-gfxstream\bin;C:\msys64\clangarm64\bin;%PATH%
+set PYTHONPATH=...\tools\qemu-gfxstream\pysite      # tempfile sandbox fix
+meson setup build --reconfigure -Dvnc=enabled -Dpixman=enabled
+```
+Hits:
+1. `Program 'sh' not found` → busybox `sh.exe` must be on PATH (bin\ has it).
+2. `tempfile.mkdtemp` PermissionError → `PYTHONPATH=pysite` (sitecustomize fix).
+3. `Feature vnc cannot be enabled: cannot enable VNC if pixman is not available`
+   → `auto_features=disabled` also disables pixman; **enable both**:
+   `-Dvnc=enabled -Dpixman=enabled` (pixman 0.46.4 comes from msys2 clangarm64).
+
+### Rebuild
+```
+ninja -C build          # ~2092 steps after reconfigure; 10-30 min
+```
+Note: **run ninja from a normal terminal**, not a pipe-capturing harness —
+ninja's compiler subprocesses stall with piped stdio. Redirect to a file
+(`ninja -C build *> build.log`) or use an interactive shell.
+
+### Verify
+```
+build\qemu-system-aarch64.exe -vnc help     # "vnc options:" => VNC present
+build\qemu-system-aarch64.exe -display "vnc=127.0.0.1:0,websocket=5901" -machine none -S
+# then (another shell):
+Test-NetConnection 127.0.0.1 -Port 5901     # websocket VNC -> True
+Test-NetConnection 127.0.0.1 -Port 5900     # raw VNC        -> True
+python -c "import socket;print(socket.create_connection(('127.0.0.1',5900),5).recv(12))"
+# -> b'RFB 003.008\n'
+```
+Verified 2026-08-29: embedded launch boots Android 16 to `sys.boot_completed=1`
+with both VNC ports open and RFB handshake OK.
+
+### Tauri app integration
+- `src-tauri/src/lib.rs`: `start_emulator` defaults to `embedded` mode
+  (launches `launch.ps1 -DisplayMode embedded -GpuMode basic`);
+  `find_repo_root` walks CWD/EXE instead of a hardcoded path.
+- `src/App.tsx`: noVNC connects to `ws://127.0.0.1:5901`; embedded is default.
+- Tauri CLI: use `npm run tauri build` (or `npx tauri build`) — the `tauri`
+  binary ships as the `@tauri-apps/cli` devDependency, so `cargo tauri ...`
+  fails with "no such command: tauri".
