@@ -8,6 +8,72 @@ use std::thread;
 use std::time::Duration;
 use serde::Serialize;
 
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
+
+// CREATE_NO_WINDOW (0x08000000): every spawned console process (adb,
+// powershell, taskkill, scrcpy) would flash a terminal window otherwise.
+// A GUI app must set this on ALL child processes or the user sees windows
+// popping up constantly (esp. the 1.5s status poll spawning adb).
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+fn silent_command(program: impl AsRef<std::ffi::OsStr>) -> Command {
+    let mut cmd = Command::new(program);
+    #[cfg(windows)]
+    cmd.creation_flags(CREATE_NO_WINDOW);
+    cmd
+}
+
+/// Run a command and capture output, killing it if it exceeds `timeout`.
+/// adb can hang (device offline, ADB server starting), which would otherwise
+/// block the status-poll thread and make the app feel frozen.
+fn run_with_timeout(cmd: &mut Command, timeout: Duration) -> std::process::Output {
+    use std::process::Stdio;
+    let mut child = match cmd.stdout(Stdio::piped()).stderr(Stdio::piped()).spawn() {
+        Ok(c) => c,
+        Err(_) => {
+            return std::process::Output {
+                status: std::process::ExitStatus::default(),
+                stdout: Vec::new(),
+                stderr: Vec::new(),
+            }
+        }
+    };
+    let deadline = std::time::Instant::now() + timeout;
+    let mut buf_out = Vec::new();
+    let mut buf_err = Vec::new();
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(st)) => break st,
+            Ok(None) => {}
+            Err(_) => break std::process::ExitStatus::default(),
+        }
+        if std::time::Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            return std::process::Output {
+                status: std::process::ExitStatus::default(),
+                stdout: Vec::new(),
+                stderr: b"timed out".to_vec(),
+            };
+        }
+        thread::sleep(Duration::from_millis(50));
+    };
+    // final drain
+    use std::io::Read;
+    if let Some(mut o) = child.stdout.take() {
+        let mut tmp = Vec::new();
+        let _ = o.read_to_end(&mut tmp);
+        buf_out.extend(tmp);
+    }
+    if let Some(mut o) = child.stderr.take() {
+        let mut tmp = Vec::new();
+        let _ = o.read_to_end(&mut tmp);
+        buf_err.extend(tmp);
+    }
+    std::process::Output { status, stdout: buf_out, stderr: buf_err }
+}
+
 #[derive(Serialize)]
 struct EmulatorStatus {
     running: bool,
@@ -50,7 +116,7 @@ fn get_touch_sender() -> &'static Sender<[u8; 14]> {
                         }
                     } else {
                         // Ensure ADB port forward is active and retry once
-                        let _ = Command::new("adb")
+                        let _ = silent_command("adb")
                             .args(&["-s", "127.0.0.1:5555", "forward", "tcp:6666", "tcp:6666"])
                             .output();
                         if let Ok(mut s) = TcpStream::connect_timeout(&addr, Duration::from_millis(80)) {
@@ -74,7 +140,7 @@ fn get_touch_sender() -> &'static Sender<[u8; 14]> {
 
                     match cmd {
                         1 => {
-                            let _ = Command::new("adb")
+                            let _ = silent_command("adb")
                                 .args(&["-s", "127.0.0.1:5555", "shell", "input", "tap", &x1.to_string(), &y1.to_string()])
                                 .output();
                         }
@@ -90,16 +156,16 @@ fn get_touch_sender() -> &'static Sender<[u8; 14]> {
                                 if let Some((mx, my)) = last_move {
                                     let dist = ((mx as i32 - dx as i32).abs() + (my as i32 - dy as i32).abs()) as u32;
                                     if dist > 15 {
-                                        let _ = Command::new("adb")
+                                        let _ = silent_command("adb")
                                             .args(&["-s", "127.0.0.1:5555", "shell", "input", "swipe", &dx.to_string(), &dy.to_string(), &mx.to_string(), &my.to_string(), "150"])
                                             .output();
                                     } else {
-                                        let _ = Command::new("adb")
+                                        let _ = silent_command("adb")
                                             .args(&["-s", "127.0.0.1:5555", "shell", "input", "tap", &dx.to_string(), &dy.to_string()])
                                             .output();
                                     }
                                 } else {
-                                    let _ = Command::new("adb")
+                                    let _ = silent_command("adb")
                                         .args(&["-s", "127.0.0.1:5555", "shell", "input", "tap", &dx.to_string(), &dy.to_string()])
                                         .output();
                                 }
@@ -108,7 +174,7 @@ fn get_touch_sender() -> &'static Sender<[u8; 14]> {
                             last_move = None;
                         }
                         5 => {
-                            let _ = Command::new("adb")
+                            let _ = silent_command("adb")
                                 .args(&["-s", "127.0.0.1:5555", "shell", "input", "swipe", &x1.to_string(), &y1.to_string(), &x2.to_string(), &y2.to_string(), &dur.to_string()])
                                 .output();
                         }
@@ -196,7 +262,7 @@ fn start_emulator(display_mode: Option<String>) -> Result<String, String> {
         .to_str()
         .ok_or_else(|| "Failed to convert script path to string".to_string())?;
 
-    match Command::new("powershell.exe")
+    match silent_command("powershell.exe")
         .current_dir(&repo_root)
         .args(&[
             "-NoProfile",
@@ -235,13 +301,16 @@ fn launch_scrcpy() -> Result<String, String> {
     let scrcpy_server = scrcpy_dir.join("scrcpy-server");
 
     // Ensure adb connection is established
-    let _ = Command::new("adb").args(&["connect", "127.0.0.1:5555"]).output();
+    let _ = run_with_timeout(
+        silent_command("adb").args(&["connect", "127.0.0.1:5555"]),
+        Duration::from_secs(5),
+    );
 
     // Canonical scrcpy stream config — measured optimum (PERFORMANCE.md):
     // the guest's software H264 encoder saturates around 11-13 fps at
     // 60fps/4M; capping to 30fps/960p/2M keeps the stream stable instead of
     // bursty, which reads as smoother. Do not raise silently.
-    let child = Command::new(&scrcpy_exe)
+    let child = silent_command(&scrcpy_exe)
         .current_dir(&scrcpy_dir)
         .env("SCRCPY_SERVER_PATH", &scrcpy_server)
         .args(&[
@@ -270,7 +339,7 @@ fn stop_scrcpy() -> Result<String, String> {
         let _ = child.kill();
         *lock = None;
     }
-    let _ = Command::new("taskkill")
+    let _ = silent_command("taskkill")
         .args(&["/F", "/IM", "scrcpy.exe"])
         .output();
 
@@ -282,7 +351,7 @@ fn stop_emulator() -> Result<String, String> {
     let _ = stop_scrcpy();
 
     // Kill QEMU process on Windows
-    let _ = Command::new("taskkill")
+    let _ = silent_command("taskkill")
         .args(&["/F", "/IM", "qemu-system-aarch64.exe"])
         .output();
 
@@ -305,22 +374,20 @@ fn get_emulator_status() -> EmulatorStatus {
     let mut boot_completed = false;
 
     if port_5555 {
-        if let Ok(output) = Command::new("adb")
-            .args(&["-s", "127.0.0.1:5555", "get-state"])
-            .output()
-        {
-            let s = String::from_utf8_lossy(&output.stdout);
-            if s.contains("device") {
-                adb_ready = true;
-                if let Ok(b_out) = Command::new("adb")
-                    .args(&["-s", "127.0.0.1:5555", "shell", "getprop", "sys.boot_completed"])
-                    .output()
-                {
-                    let b = String::from_utf8_lossy(&b_out.stdout);
-                    if b.trim() == "1" {
-                        boot_completed = true;
-                    }
-                }
+        let output = run_with_timeout(
+            silent_command("adb").args(&["-s", "127.0.0.1:5555", "get-state"]),
+            Duration::from_secs(3),
+        );
+        let s = String::from_utf8_lossy(&output.stdout);
+        if output.status.success() && s.contains("device") {
+            adb_ready = true;
+            let b_out = run_with_timeout(
+                silent_command("adb").args(&["-s", "127.0.0.1:5555", "shell", "getprop", "sys.boot_completed"]),
+                Duration::from_secs(3),
+            );
+            let b = String::from_utf8_lossy(&b_out.stdout);
+            if b.trim() == "1" {
+                boot_completed = true;
             }
         }
     }
@@ -347,10 +414,10 @@ fn get_emulator_status() -> EmulatorStatus {
 
 #[tauri::command]
 fn send_adb_key(key: String) -> Result<String, String> {
-    let output = Command::new("adb")
-        .args(&["-s", "127.0.0.1:5555", "shell", "input", "keyevent", &key])
-        .output()
-        .map_err(|e| format!("ADB error: {}", e))?;
+    let output = run_with_timeout(
+        silent_command("adb").args(&["-s", "127.0.0.1:5555", "shell", "input", "keyevent", &key]),
+        Duration::from_secs(5),
+    );
 
     if output.status.success() {
         Ok("Key event sent".to_string())
@@ -361,10 +428,10 @@ fn send_adb_key(key: String) -> Result<String, String> {
 
 #[tauri::command]
 fn send_adb_text(text: String) -> Result<String, String> {
-    let output = Command::new("adb")
-        .args(&["-s", "127.0.0.1:5555", "shell", "input", "text", &text])
-        .output()
-        .map_err(|e| format!("ADB error: {}", e))?;
+    let output = run_with_timeout(
+        silent_command("adb").args(&["-s", "127.0.0.1:5555", "shell", "input", "text", &text]),
+        Duration::from_secs(5),
+    );
 
     if output.status.success() {
         Ok("Text sent".to_string())
@@ -385,29 +452,33 @@ fn deploy_touch_daemon() -> Result<String, String> {
     }
 
     // Check if daemon is already running
-    let check = Command::new("adb")
-        .args(&["-s", "127.0.0.1:5555", "shell", "pidof touch_daemon"])
-        .output();
-    let is_running = check.map(|o| !o.stdout.is_empty()).unwrap_or(false);
+    let check = run_with_timeout(
+        silent_command("adb").args(&["-s", "127.0.0.1:5555", "shell", "pidof touch_daemon"]),
+        Duration::from_secs(5),
+    );
+    let is_running = !check.stdout.is_empty();
 
     if !is_running {
         // Push the daemon binary
-        let _ = Command::new("adb")
-            .args(&["-s", "127.0.0.1:5555", "push",
+        let _ = run_with_timeout(
+            silent_command("adb").args(&["-s", "127.0.0.1:5555", "push",
                     daemon_elf.to_str().unwrap(),
-                    "/data/local/tmp/touch_daemon"])
-            .output();
+                    "/data/local/tmp/touch_daemon"]),
+            Duration::from_secs(10),
+        );
 
-        let _ = Command::new("adb")
-            .args(&["-s", "127.0.0.1:5555", "shell",
-                    "chmod 755 /data/local/tmp/touch_daemon; /data/local/tmp/touch_daemon &"])
-            .output();
+        let _ = run_with_timeout(
+            silent_command("adb").args(&["-s", "127.0.0.1:5555", "shell",
+                    "chmod 755 /data/local/tmp/touch_daemon; /data/local/tmp/touch_daemon &"]),
+            Duration::from_secs(5),
+        );
     }
 
     // Set up ADB port-forward so host:6666 -> guest:6666
-    let _ = Command::new("adb")
-        .args(&["-s", "127.0.0.1:5555", "forward", "tcp:6666", "tcp:6666"])
-        .output();
+    let _ = run_with_timeout(
+        silent_command("adb").args(&["-s", "127.0.0.1:5555", "forward", "tcp:6666", "tcp:6666"]),
+        Duration::from_secs(5),
+    );
 
     Ok("Touch daemon deployed and active".to_string())
 }
@@ -452,9 +523,10 @@ fn send_motion_up(_x: u32, _y: u32) -> Result<(), String> {
 #[tauri::command]
 fn optimize_performance() -> Result<String, String> {
     // Disable window, transition, and animator scales in Android guest for instant UI responsiveness
-    let _ = Command::new("adb")
-        .args(&["-s", "127.0.0.1:5555", "shell", "settings put global window_animation_scale 0; settings put global transition_animation_scale 0; settings put global animator_duration_scale 0"])
-        .output();
+    let _ = run_with_timeout(
+        silent_command("adb").args(&["-s", "127.0.0.1:5555", "shell", "settings put global window_animation_scale 0; settings put global transition_animation_scale 0; settings put global animator_duration_scale 0"]),
+        Duration::from_secs(5),
+    );
 
     Ok("UI animations optimized".to_string())
 }
