@@ -111,3 +111,19 @@ with both VNC ports open and RFB handshake OK.
 - Tauri CLI: use `npm run tauri build` (or `npx tauri build`) — the `tauri`
   binary ships as the `@tauri-apps/cli` devDependency, so `cargo tauri ...`
   fails with "no such command: tauri".
+
+### ⚠️ Build the Tauri app with `npx tauri build`, NOT `cargo build`
+
+A plain `cargo build --release` produces a **dev-mode** binary:
+`tauri_build::build()` emits `cargo:rustc-cfg=dev` when the Tauri CLI isn't
+driving the build, and with `cfg(dev)` the app loads `devUrl`
+(`http://localhost:1420`) instead of the embedded `frontendDist` assets.
+If the Vite dev server isn't running, the window is **completely blank**.
+
+Always build with:
+```
+npx tauri build          # sets release/embed correctly, produces .msi/.exe
+```
+The built exe embeds `dist/` (verified: contains `index-D-Zj8LYJ.js`,
+loads from `tauri.localhost`). To confirm a build is release-embedded, the
+exe must NOT load `localhost:1420` when launched without the dev server.
