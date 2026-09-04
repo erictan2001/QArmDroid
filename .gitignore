@@ -22,6 +22,12 @@ dist-ssr/
 # Rust & Tauri
 src-tauri/target/
 
+# Executables & Object Files
+*.exe
+*.obj
+*.o
+*.a
+
 # Android Images & Heavy Disk Binaries (downloaded / runtime generated)
 aosp_cf_arm64_only_phone-img/
 images/

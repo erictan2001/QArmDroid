@@ -1,0 +1,12 @@
+[submodule "tools/qemu-gfxstream/qemu"]
+	path = tools/qemu-gfxstream/qemu
+	url = https://gitlab.com/qemu-project/qemu.git
+[submodule "tools/qemu-gfxstream/gfxstream"]
+	path = tools/qemu-gfxstream/gfxstream
+	url = https://github.com/google/gfxstream.git
+[submodule "tools/qemu-gfxstream/rutabaga_gfx"]
+	path = tools/qemu-gfxstream/rutabaga_gfx
+	url = https://github.com/magma-gpu/rutabaga_gfx.git
+[submodule "tools/qemu-gfxstream/kernel-src/common"]
+	path = tools/qemu-gfxstream/kernel-src/common
+	url = https://android.googlesource.com/kernel/common
