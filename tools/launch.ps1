@@ -313,19 +313,30 @@ if ($PrintArgs) {
 # --------------------------------------------------------- stale process --- #
 Get-Process -Name "qemu-system-aarch64", "scrcpy" -ErrorAction SilentlyContinue |
     Stop-Process -Force -ErrorAction SilentlyContinue
-try { & "C:\platform-tools\adb.exe" forward --remove-all 2>&1 | Out-Null } catch {}
+$Adb = if (Test-Path "C:\platform-tools\adb.exe") {
+    "C:\platform-tools\adb.exe"
+} elseif (Get-Command adb -ErrorAction SilentlyContinue) {
+    (Get-Command adb).Source
+} elseif (Test-Path "$PSScriptRoot\scrcpy\adb.exe") {
+    "$PSScriptRoot\scrcpy\adb.exe"
+} else {
+    "adb"
+}
+try { & $Adb forward --remove-all 2>&1 | Out-Null } catch {}
 Start-Sleep -Milliseconds 500
 if (-not (Test-Path $M0Dir)) { New-Item -ItemType Directory -Path $M0Dir -Force | Out-Null }
 
 # ------------------------------------------------------------- watchdog ---- #
 Start-Job -ScriptBlock {
+    param($AdbExe)
     do {
         Start-Sleep -Seconds 2
-        $s = & "C:\platform-tools\adb.exe" -s 127.0.0.1:5555 shell getprop sys.boot_completed 2>$null
+        & $AdbExe connect 127.0.0.1:5555 2>$null | Out-Null
+        $s = & $AdbExe -s 127.0.0.1:5555 shell getprop sys.boot_completed 2>$null
     } until ($s -match "1")
     # Set both size AND density to match 1280x800 display (hdpi ~240 for tablet)
-    & "C:\platform-tools\adb.exe" -s 127.0.0.1:5555 shell "setprop ctl.stop seriallogging; setprop ctl.stop console; dmesg -n 1; wm size 1280x800; wm density 240; settings put global window_animation_scale 0.5; settings put global transition_animation_scale 0.5; settings put global animator_duration_scale 0.5" 2>$null
-} | Out-Null
+    & $AdbExe -s 127.0.0.1:5555 shell "setprop ctl.stop seriallogging; setprop ctl.stop console; dmesg -n 1; wm size 1280x800; wm density 240; settings put global window_animation_scale 0.5; settings put global transition_animation_scale 0.5; settings put global animator_duration_scale 0.5" 2>$null
+} -ArgumentList $Adb | Out-Null
 
 Write-Host "==========================================================" -ForegroundColor Cyan
 Write-Host " Starting Android 16 ARM64 Emulator (QEMU + WHPX)" -ForegroundColor Green

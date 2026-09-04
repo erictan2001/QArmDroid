@@ -379,9 +379,6 @@ export function App() {
 
   const handleContextMenu = (e: React.MouseEvent) => {
     e.preventDefault();
-    // Embedded mode: noVNC forwards mouse buttons over VNC to the guest,
-    // so right-click reaches Android natively; no extra Back key needed.
-    if (displayMode === "embedded" && connected) return;
     // Right-click triggers Android Back button
     sendKey("4");
   };
@@ -471,25 +468,121 @@ export function App() {
     }
   };
 
+  // Key control is ready if ADB has connected to the guest OR if embedded VNC is actively connected
+  const isKeyControlReady = status.adb_ready || (displayMode === "embedded" && connected);
+
   const sendKey = async (key: string) => {
+    // 1. If ADB is connected, dispatch exact Android key event directly
+    if (status.adb_ready) {
+      try {
+        await invoke("send_adb_key", { key });
+        return;
+      } catch (e) {
+        console.warn("ADB key failed, trying VNC fallback:", e);
+      }
+    }
+
+    // 2. In embedded mode, send direct hardware keysym via noVNC to QEMU's usb-kbd
+    if (displayMode === "embedded" && rfbRef.current) {
+      const keyMap: Record<string, { keysym: number; code: string }> = {
+        "4": { keysym: 0xff1b, code: "Escape" },          // Back -> Escape
+        "3": { keysym: 0xff50, code: "Home" },            // Home -> Home
+        "187": { keysym: 0xffbe, code: "F1" },            // Recents / App Switch -> F1
+        "24": { keysym: 0x1008ff13, code: "AudioVolumeUp" },
+        "25": { keysym: 0x1008ff11, code: "AudioVolumeDown" },
+        "26": { keysym: 0x1008ff2a, code: "Power" },
+      };
+      const mapped = keyMap[key];
+      if (mapped) {
+        try {
+          (rfbRef.current as any).sendKey(mapped.keysym, mapped.code);
+          return;
+        } catch (err) {
+          console.error("VNC sendKey error:", err);
+        }
+      }
+    }
+
+    // 3. Fallback: invoke send_adb_key (Rust backend auto-connects to 127.0.0.1:5555 if needed)
     try {
       await invoke("send_adb_key", { key });
     } catch (e) {
-      setLogMsg(`ADB key error: ${e}`);
+      setLogMsg(`Key event error: ${e}`);
     }
   };
 
   const handleSendText = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!inputText.trim()) return;
+    const textToSend = inputText;
+    setInputText("");
+
+    // Try ADB input text first if ADB is ready
+    if (status.adb_ready) {
+      try {
+        const escaped = textToSend.replace(/ /g, "%s");
+        await invoke("send_adb_text", { text: escaped });
+        return;
+      } catch (e) {
+        console.warn("ADB text error, trying VNC typing:", e);
+      }
+    }
+
+    // Embedded mode: forward characters over VNC directly to guest
+    if (displayMode === "embedded" && rfbRef.current) {
+      try {
+        for (let i = 0; i < textToSend.length; i++) {
+          const char = textToSend[i];
+          const code = char.charCodeAt(0);
+          (rfbRef.current as any).sendKey(code, `Key${char.toUpperCase()}`);
+        }
+        (rfbRef.current as any).sendKey(0xff0d, "Enter");
+        return;
+      } catch (err) {
+        console.error("VNC sendText error:", err);
+      }
+    }
+
+    // Fallback: invoke send_adb_text
     try {
-      const escaped = inputText.replace(/ /g, "%s");
+      const escaped = textToSend.replace(/ /g, "%s");
       await invoke("send_adb_text", { text: escaped });
-      setInputText("");
     } catch (e) {
-      setLogMsg(`ADB text error: ${e}`);
+      setLogMsg(`Send text error: ${e}`);
     }
   };
+
+  // Global physical keyboard shortcuts (Esc = Back, F1 = Recents, F3/Home = Home)
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Don't intercept if user is typing in an HTML input or textarea
+      const target = e.target as HTMLElement | null;
+      if (
+        target &&
+        (target.tagName === "INPUT" ||
+          target.tagName === "TEXTAREA" ||
+          target.isContentEditable)
+      ) {
+        return;
+      }
+
+      if (!isKeyControlReady) return;
+
+      if (e.key === "Escape") {
+        e.preventDefault();
+        sendKey("4"); // Android Back
+      } else if (e.key === "F1" || e.key === "F2") {
+        e.preventDefault();
+        sendKey("187"); // Android App Switch / Recents
+      } else if (e.key === "F3" || (e.altKey && e.key === "Home")) {
+        e.preventDefault();
+        sendKey("3"); // Android Home
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [isKeyControlReady, status.adb_ready, displayMode, connected]);
 
   return (
     <div className="app-container">
@@ -691,25 +784,25 @@ export function App() {
             <div className="button-group">
               <button
                 className="tool-btn"
-                title="Back (KEYCODE_BACK)"
+                title="Back (KEYCODE_BACK, Esc, Right-Click)"
                 onClick={() => sendKey("4")}
-                disabled={!status.adb_ready}
+                disabled={!isKeyControlReady}
               >
                 ◀ Back
               </button>
               <button
                 className="tool-btn"
-                title="Home (KEYCODE_HOME)"
+                title="Home (KEYCODE_HOME, F3)"
                 onClick={() => sendKey("3")}
-                disabled={!status.adb_ready}
+                disabled={!isKeyControlReady}
               >
                 ⌂ Home
               </button>
               <button
                 className="tool-btn"
-                title="Recents / App Switcher (KEYCODE_APP_SWITCH)"
+                title="Recents / App Switcher (KEYCODE_APP_SWITCH, F1)"
                 onClick={() => sendKey("187")}
-                disabled={!status.adb_ready}
+                disabled={!isKeyControlReady}
               >
                 ▢ Recents
               </button>
@@ -723,7 +816,7 @@ export function App() {
                 className="tool-btn"
                 title="Volume Up"
                 onClick={() => sendKey("24")}
-                disabled={!status.adb_ready}
+                disabled={!isKeyControlReady}
               >
                 🔊 Vol +
               </button>
@@ -731,7 +824,7 @@ export function App() {
                 className="tool-btn"
                 title="Volume Down"
                 onClick={() => sendKey("25")}
-                disabled={!status.adb_ready}
+                disabled={!isKeyControlReady}
               >
                 🔉 Vol -
               </button>
@@ -739,7 +832,7 @@ export function App() {
                 className="tool-btn"
                 title="Power Button"
                 onClick={() => sendKey("26")}
-                disabled={!status.adb_ready}
+                disabled={!isKeyControlReady}
               >
                 ⏻ Power
               </button>
@@ -754,9 +847,9 @@ export function App() {
                 placeholder="Type text & enter..."
                 value={inputText}
                 onChange={(e) => setInputText(e.target.value)}
-                disabled={!status.adb_ready}
+                disabled={!isKeyControlReady}
               />
-              <button type="submit" className="btn btn-secondary" disabled={!status.adb_ready}>
+              <button type="submit" className="btn btn-secondary" disabled={!isKeyControlReady}>
                 Send
               </button>
             </form>

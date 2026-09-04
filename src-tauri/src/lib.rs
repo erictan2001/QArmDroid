@@ -49,6 +49,23 @@ fn silent_command(program: impl AsRef<std::ffi::OsStr>) -> Command {
     cmd
 }
 
+/// Locate adb executable: prefer C:\platform-tools\adb.exe or bundled scrcpy\adb.exe, fallback to system PATH "adb"
+fn adb_cmd() -> Command {
+    let adb_path: PathBuf = if Path::new(r"C:\platform-tools\adb.exe").exists() {
+        PathBuf::from(r"C:\platform-tools\adb.exe")
+    } else if let Ok(repo_root) = find_repo_root() {
+        let scrcpy_adb = repo_root.join("tools").join("scrcpy").join("adb.exe");
+        if scrcpy_adb.exists() {
+            scrcpy_adb
+        } else {
+            PathBuf::from("adb")
+        }
+    } else {
+        PathBuf::from("adb")
+    };
+    silent_command(adb_path)
+}
+
 /// Run a command and capture output, killing it if it exceeds `timeout`.
 /// adb can hang (device offline, ADB server starting), which would otherwise
 /// block the status-poll thread and make the app feel frozen.
@@ -258,7 +275,7 @@ fn get_touch_sender() -> &'static Sender<[u8; 14]> {
                         }
                     } else {
                         // Ensure ADB port forward is active and retry once
-                        let _ = silent_command("adb")
+                        let _ = adb_cmd()
                             .args(&["-s", "127.0.0.1:5555", "forward", "tcp:6666", "tcp:6666"])
                             .output();
                         if let Ok(mut s) = TcpStream::connect_timeout(&addr, Duration::from_millis(80)) {
@@ -282,7 +299,7 @@ fn get_touch_sender() -> &'static Sender<[u8; 14]> {
 
                     match cmd {
                         1 => {
-                            let _ = silent_command("adb")
+                            let _ = adb_cmd()
                                 .args(&["-s", "127.0.0.1:5555", "shell", "input", "tap", &x1.to_string(), &y1.to_string()])
                                 .output();
                         }
@@ -298,16 +315,16 @@ fn get_touch_sender() -> &'static Sender<[u8; 14]> {
                                 if let Some((mx, my)) = last_move {
                                     let dist = ((mx as i32 - dx as i32).abs() + (my as i32 - dy as i32).abs()) as u32;
                                     if dist > 15 {
-                                        let _ = silent_command("adb")
+                                        let _ = adb_cmd()
                                             .args(&["-s", "127.0.0.1:5555", "shell", "input", "swipe", &dx.to_string(), &dy.to_string(), &mx.to_string(), &my.to_string(), "150"])
                                             .output();
                                     } else {
-                                        let _ = silent_command("adb")
+                                        let _ = adb_cmd()
                                             .args(&["-s", "127.0.0.1:5555", "shell", "input", "tap", &dx.to_string(), &dy.to_string()])
                                             .output();
                                     }
                                 } else {
-                                    let _ = silent_command("adb")
+                                    let _ = adb_cmd()
                                         .args(&["-s", "127.0.0.1:5555", "shell", "input", "tap", &dx.to_string(), &dy.to_string()])
                                         .output();
                                 }
@@ -316,7 +333,7 @@ fn get_touch_sender() -> &'static Sender<[u8; 14]> {
                             last_move = None;
                         }
                         5 => {
-                            let _ = silent_command("adb")
+                            let _ = adb_cmd()
                                 .args(&["-s", "127.0.0.1:5555", "shell", "input", "swipe", &x1.to_string(), &y1.to_string(), &x2.to_string(), &y2.to_string(), &dur.to_string()])
                                 .output();
                         }
@@ -528,7 +545,23 @@ fn start_emulator_with(
         .args(&args)
         .spawn()
     {
-        Ok(_) => Ok(format!("Emulator launched in '{}' display mode.", mode)),
+        Ok(_) => {
+            // In the background, auto-connect ADB as soon as port 5555 is ready
+            std::thread::spawn(|| {
+                for _ in 0..60 {
+                    std::thread::sleep(Duration::from_secs(2));
+                    if is_port_open(5555, 100) {
+                        let _ = adb_cmd().args(&["connect", "127.0.0.1:5555"]).output();
+                        if let Ok(out) = adb_cmd().args(&["-s", "127.0.0.1:5555", "get-state"]).output() {
+                            if String::from_utf8_lossy(&out.stdout).contains("device") {
+                                break;
+                            }
+                        }
+                    }
+                }
+            });
+            Ok(format!("Emulator launched in '{}' display mode.", mode))
+        }
         Err(e) => Err(format!("Failed to start emulator: {}", e)),
     }
 }
@@ -555,7 +588,7 @@ fn launch_scrcpy() -> Result<String, String> {
 
     // Ensure adb connection is established
     let _ = run_with_timeout(
-        silent_command("adb").args(&["connect", "127.0.0.1:5555"]),
+        adb_cmd().args(&["connect", "127.0.0.1:5555"]),
         Duration::from_secs(5),
     );
 
@@ -628,15 +661,31 @@ fn get_emulator_status() -> EmulatorStatus {
 
     if port_5555 {
         let output = run_with_timeout(
-            silent_command("adb").args(&["-s", "127.0.0.1:5555", "get-state"]),
-            Duration::from_secs(3),
+            adb_cmd().args(&["-s", "127.0.0.1:5555", "get-state"]),
+            Duration::from_millis(400),
         );
         let s = String::from_utf8_lossy(&output.stdout);
         if output.status.success() && s.contains("device") {
             adb_ready = true;
+        } else {
+            // Port 5555 is open, but device is not registered in ADB client; connect now
+            let _ = run_with_timeout(
+                adb_cmd().args(&["connect", "127.0.0.1:5555"]),
+                Duration::from_millis(800),
+            );
+            let check = run_with_timeout(
+                adb_cmd().args(&["-s", "127.0.0.1:5555", "get-state"]),
+                Duration::from_millis(400),
+            );
+            if check.status.success() && String::from_utf8_lossy(&check.stdout).contains("device") {
+                adb_ready = true;
+            }
+        }
+
+        if adb_ready {
             let b_out = run_with_timeout(
-                silent_command("adb").args(&["-s", "127.0.0.1:5555", "shell", "getprop", "sys.boot_completed"]),
-                Duration::from_secs(3),
+                adb_cmd().args(&["-s", "127.0.0.1:5555", "shell", "getprop", "sys.boot_completed"]),
+                Duration::from_millis(500),
             );
             let b = String::from_utf8_lossy(&b_out.stdout);
             if b.trim() == "1" {
@@ -667,10 +716,22 @@ fn get_emulator_status() -> EmulatorStatus {
 
 #[tauri::command]
 fn send_adb_key(key: String) -> Result<String, String> {
-    let output = run_with_timeout(
-        silent_command("adb").args(&["-s", "127.0.0.1:5555", "shell", "input", "keyevent", &key]),
-        Duration::from_secs(5),
+    let mut output = run_with_timeout(
+        adb_cmd().args(&["-s", "127.0.0.1:5555", "shell", "input", "keyevent", &key]),
+        Duration::from_secs(3),
     );
+
+    if !output.status.success() {
+        // Attempt connect and retry
+        let _ = run_with_timeout(
+            adb_cmd().args(&["connect", "127.0.0.1:5555"]),
+            Duration::from_secs(2),
+        );
+        output = run_with_timeout(
+            adb_cmd().args(&["-s", "127.0.0.1:5555", "shell", "input", "keyevent", &key]),
+            Duration::from_secs(3),
+        );
+    }
 
     if output.status.success() {
         Ok("Key event sent".to_string())
@@ -681,10 +742,22 @@ fn send_adb_key(key: String) -> Result<String, String> {
 
 #[tauri::command]
 fn send_adb_text(text: String) -> Result<String, String> {
-    let output = run_with_timeout(
-        silent_command("adb").args(&["-s", "127.0.0.1:5555", "shell", "input", "text", &text]),
-        Duration::from_secs(5),
+    let mut output = run_with_timeout(
+        adb_cmd().args(&["-s", "127.0.0.1:5555", "shell", "input", "text", &text]),
+        Duration::from_secs(3),
     );
+
+    if !output.status.success() {
+        // Attempt connect and retry
+        let _ = run_with_timeout(
+            adb_cmd().args(&["connect", "127.0.0.1:5555"]),
+            Duration::from_secs(2),
+        );
+        output = run_with_timeout(
+            adb_cmd().args(&["-s", "127.0.0.1:5555", "shell", "input", "text", &text]),
+            Duration::from_secs(3),
+        );
+    }
 
     if output.status.success() {
         Ok("Text sent".to_string())
@@ -706,7 +779,7 @@ fn deploy_touch_daemon() -> Result<String, String> {
 
     // Check if daemon is already running
     let check = run_with_timeout(
-        silent_command("adb").args(&["-s", "127.0.0.1:5555", "shell", "pidof touch_daemon"]),
+        adb_cmd().args(&["-s", "127.0.0.1:5555", "shell", "pidof touch_daemon"]),
         Duration::from_secs(5),
     );
     let is_running = !check.stdout.is_empty();
@@ -714,14 +787,14 @@ fn deploy_touch_daemon() -> Result<String, String> {
     if !is_running {
         // Push the daemon binary
         let _ = run_with_timeout(
-            silent_command("adb").args(&["-s", "127.0.0.1:5555", "push",
+            adb_cmd().args(&["-s", "127.0.0.1:5555", "push",
                     daemon_elf.to_str().unwrap(),
                     "/data/local/tmp/touch_daemon"]),
             Duration::from_secs(10),
         );
 
         let _ = run_with_timeout(
-            silent_command("adb").args(&["-s", "127.0.0.1:5555", "shell",
+            adb_cmd().args(&["-s", "127.0.0.1:5555", "shell",
                     "chmod 755 /data/local/tmp/touch_daemon; /data/local/tmp/touch_daemon &"]),
             Duration::from_secs(5),
         );
@@ -729,7 +802,7 @@ fn deploy_touch_daemon() -> Result<String, String> {
 
     // Set up ADB port-forward so host:6666 -> guest:6666
     let _ = run_with_timeout(
-        silent_command("adb").args(&["-s", "127.0.0.1:5555", "forward", "tcp:6666", "tcp:6666"]),
+        adb_cmd().args(&["-s", "127.0.0.1:5555", "forward", "tcp:6666", "tcp:6666"]),
         Duration::from_secs(5),
     );
 
@@ -777,7 +850,7 @@ fn send_motion_up(_x: u32, _y: u32) -> Result<(), String> {
 fn optimize_performance() -> Result<String, String> {
     // Disable window, transition, and animator scales in Android guest for instant UI responsiveness
     let _ = run_with_timeout(
-        silent_command("adb").args(&["-s", "127.0.0.1:5555", "shell", "settings put global window_animation_scale 0; settings put global transition_animation_scale 0; settings put global animator_duration_scale 0"]),
+        adb_cmd().args(&["-s", "127.0.0.1:5555", "shell", "settings put global window_animation_scale 0; settings put global transition_animation_scale 0; settings put global animator_duration_scale 0"]),
         Duration::from_secs(5),
     );
 
