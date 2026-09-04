@@ -1,8 +1,8 @@
 # STATUS — QArmDroid
 
 Single source of truth for the current state of this project.
-Historical session documents live in `DEVELOPMENT_LOG.md`, `PERFORMANCE.md`,
-`PROJECT_REPORT.md` and `research/`; where they contradict this file,
+Historical session documents live in `docs/history/DEVELOPMENT_LOG.md`, `docs/history/PERFORMANCE.md`,
+`docs/history/PROJECT_REPORT.md` and `research/`; where they contradict this file,
 **this file wins**.
 
 ## What works today

@@ -107,28 +107,31 @@ tools\launch.ps1 -DisplayMode <sdl|gtk|none|scrcpy|vnc> -GpuMode <basic|gfxstrea
 
 ```
 QArmDroid/
-├── tools/
+├── src/                        # React + TypeScript Vite frontend (UI & setup panels)
+├── src-tauri/                  # Rust Tauri application host (windowing, VNC, lifecycle)
+├── tools/                      # Automation, launchers & build pipelines
 │   ├── reproduce.ps1           # ★ ONE-SHOT reproduce: env + patches + image + build + launch + verify
+│   ├── launch.ps1              # Canonical QEMU launcher (single source of argv)
+│   ├── m0_build.py             # bootconfig / initrd / GPT disk generator (pure-Python tools)
+│   ├── provision_bundle.ps1    # Automated installer provisioning & disk builder
+│   ├── stage_bundle.ps1        # Bundles QEMU, Python, images & tools into installer
 │   ├── bootstrap_env.ps1       # detect python/adb/qemu -> tools/env.json (machine-independent)
 │   ├── apply_patches.ps1       # apply custom QEMU/gfxstream patches to nested sources
 │   ├── setup_image.ps1         # unpack Cuttlefish image zip -> m0_build layout (pure-Python)
 │   ├── imgtools.py             # ★ pure-Python lz4 / sparse-unsparse / cpio (no msys2/busybox)
-│   ├── launch.ps1              # Canonical QEMU launcher (single source of argv)
-│   ├── m0_build.py             # bootconfig / initrd / GPT disk generator (pure-Python tools)
-│   ├── build_gfxstream_msvc.bat# MSVC/clang-cl gfxstream build (WIP, blocked)
-│   ├── qemu-gfxstream/         # Custom QEMU 11 + gfxstream/rutabaga sources
-│   │   └── patches/            # ★ the custom patches (tracked here; nested repos are gitlinks)
-│   └── env.json                # per-machine paths (gitignored, written by bootstrap_env.ps1)
-├── aosp_cf_arm64_only_phone-img/  # Cuttlefish image + work/m0 artifacts (gitignored)
-├── DECISION_LOG.md             # Full engineering decision history
-├── GPU_PASSTHROUGH_DECISION.md # Honest GPU-passthrough assessment
-├── docs/research/GPU_PASSTHROUGH_RETHOUGHT.md  # Deep dive into EGL/Vulkan paths
+│   └── qemu-gfxstream/         # Custom QEMU 11 + gfxstream/rutabaga submodules & patches
+│       └── patches/            # Custom patches applied to upstream sources
+├── docs/                       # Project documentation & logs
+│   ├── DECISION_LOG.md         # Full engineering decision history
+│   ├── history/                # Development, performance & project history logs
+│   └── research/               # Architecture & GPU passthrough research
+├── STATUS.md                   # Single source of truth for project status
 └── README.md
 ```
 
 ### How the repo stays reproducible
 
-The nested repos `tools/qemu-gfxstream/qemu` and `gfxstream` are **gitlinks**
+The nested repos `tools/qemu-gfxstream/qemu` and `gfxstream` are **submodules**
 pinned to upstream commits. All local modifications (ExternalBlob
 `renderer-features` property, SDL color-format mapping, USB HID fix, gfxstream
 Windows bincompat + POSIX shim headers) live in
@@ -160,7 +163,7 @@ Three coordinated fixes prevent the cut-off launcher / missing nav bar:
 
 > ⚠️ If you rebuild `initrd.img`, always rebuild `bootconfig` first — the
 > initrd embeds the existing `bootconfig.bin`. (This exact mistake caused the
-> density fix to silently not apply — see DECISION_LOG.)
+> density fix to silently not apply — see `docs/DECISION_LOG.md`.)
 
 ---
 
@@ -173,7 +176,7 @@ Three coordinated fixes prevent the cut-off launcher / missing nav bar:
 | SDL + basic (SwiftShader) | — | — | ✅ **Working** |
 | gfxstream/ranchu (Vulkan-only) | ❌ | ✅ | ❌ SurfaceFlinger needs GLES interop |
 
-**Root cause chain** (details in `GPU_PASSTHROUGH_DECISION.md`):
+**Root cause chain** (details in `docs/research/GPU_PASSTHROUGH_DECISION.md`):
 1. gfxstream's host GLES renderer uses **WGL (desktop OpenGL)** → **no native
    desktop OpenGL on Windows ARM64** → `x-gfxstream-gles` capset crashes QEMU.
 2. MinGW build additionally skips the static EGL dispatch (`#if

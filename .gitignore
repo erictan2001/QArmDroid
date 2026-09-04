@@ -67,9 +67,11 @@ tools/env.json
 src-tauri/resources/
 
 # Build artifacts & tool downloads (history-cleaned; keep locally only)
-# These were removed from git history (see DECISION_LOG); they remain on
+# These were removed from git history (see docs/DECISION_LOG.md); they remain on
 # disk for the local build environment but must never be re-committed.
 .backup-history.bundle
+tools/*.log
+tools/guest_frame.png
 tools/git-filter-repo
 tools/qemu-gfxstream/pysite/
 tools/qemu-gfxstream/bin/

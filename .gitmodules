@@ -4,9 +4,12 @@
 [submodule "tools/qemu-gfxstream/gfxstream"]
 	path = tools/qemu-gfxstream/gfxstream
 	url = https://github.com/google/gfxstream.git
+	ignore = dirty
 [submodule "tools/qemu-gfxstream/rutabaga_gfx"]
 	path = tools/qemu-gfxstream/rutabaga_gfx
 	url = https://github.com/magma-gpu/rutabaga_gfx.git
+	ignore = dirty
 [submodule "tools/qemu-gfxstream/kernel-src/common"]
 	path = tools/qemu-gfxstream/kernel-src/common
 	url = https://android.googlesource.com/kernel/common
+	ignore = all
