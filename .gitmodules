@@ -1,6 +1,7 @@
 [submodule "tools/qemu-gfxstream/qemu"]
 	path = tools/qemu-gfxstream/qemu
-	url = https://gitlab.com/qemu-project/qemu.git
+	url = https://github.com/qemu/qemu.git
+	ignore = dirty
 [submodule "tools/qemu-gfxstream/gfxstream"]
 	path = tools/qemu-gfxstream/gfxstream
 	url = https://github.com/google/gfxstream.git

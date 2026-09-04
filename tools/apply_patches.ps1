@@ -33,8 +33,8 @@ param(
 
 $ErrorActionPreference = "Continue"
 $RepoRoot  = (Resolve-Path "$PSScriptRoot\..").Path
-$PatchRoot = Join-Path $PSScriptRoot "patches"
 $GfxDir    = Join-Path $RepoRoot "tools\qemu-gfxstream"
+$PatchRoot = Join-Path $GfxDir "patches"
 if (-not $QemuDir)      { $QemuDir      = Join-Path $GfxDir "qemu" }
 if (-not $GfxstreamDir) { $GfxstreamDir = Join-Path $GfxDir "gfxstream" }
 

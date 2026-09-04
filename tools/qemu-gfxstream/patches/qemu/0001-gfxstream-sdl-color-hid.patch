@@ -1,5 +1,5 @@
 diff --git a/hw/display/virtio-gpu-rutabaga.c b/hw/display/virtio-gpu-rutabaga.c
-index ebb6c78..9514beb 100644
+index ebb6c78..be64a03 100644
 --- a/hw/display/virtio-gpu-rutabaga.c
 +++ b/hw/display/virtio-gpu-rutabaga.c
 @@ -959,6 +959,7 @@ static bool virtio_gpu_rutabaga_init(VirtIOGPU *g, Error **errp)
@@ -19,7 +19,7 @@ index ebb6c78..9514beb 100644
  
  static void virtio_gpu_rutabaga_class_init(ObjectClass *klass, const void *data)
 diff --git a/hw/input/hid.c b/hw/input/hid.c
-index de24cd0..3e01ce6 100644
+index de24cd0..9881a59 100644
 --- a/hw/input/hid.c
 +++ b/hw/input/hid.c
 @@ -426,7 +426,10 @@ int hid_pointer_poll(HIDState *hs, uint8_t *buf, int len)
@@ -35,7 +35,7 @@ index de24cd0..3e01ce6 100644
          break;
  
 diff --git a/hw/usb/dev-hid.c b/hw/usb/dev-hid.c
-index ae19d60..87f45ef 100644
+index ae19d60..02df6dd 100644
 --- a/hw/usb/dev-hid.c
 +++ b/hw/usb/dev-hid.c
 @@ -510,15 +510,15 @@ static const uint8_t qemu_tablet_hid_report_descriptor[] = {
@@ -63,7 +63,7 @@ index ae19d60..87f45ef 100644
      0xc0,		/* End Collection */
  };
 diff --git a/include/hw/virtio/virtio-gpu-pixman.h b/include/hw/virtio/virtio-gpu-pixman.h
-index 4dba782..2788422 100644
+index 4dba782..fb8bf3b 100644
 --- a/include/hw/virtio/virtio-gpu-pixman.h
 +++ b/include/hw/virtio/virtio-gpu-pixman.h
 @@ -20,6 +20,7 @@
@@ -75,7 +75,7 @@ index 4dba782..2788422 100644
      case VIRTIO_GPU_FORMAT_B8G8R8X8_UNORM:
          return PIXMAN_BE_b8g8r8x8;
 diff --git a/include/hw/virtio/virtio-gpu.h b/include/hw/virtio/virtio-gpu.h
-index f69fc19..da289ca 100644
+index f69fc19..ad5898a 100644
 --- a/include/hw/virtio/virtio-gpu.h
 +++ b/include/hw/virtio/virtio-gpu.h
 @@ -294,6 +294,7 @@ struct VirtIOGPURutabaga {
@@ -86,8 +86,98 @@ index f69fc19..da289ca 100644
      bool headless;
      uint32_t num_capsets;
      struct rutabaga *rutabaga;
+diff --git a/include/ui/sdl2.h b/include/ui/sdl2.h
+index 9daf5ec..a8ba17b 100644
+--- a/include/ui/sdl2.h
++++ b/include/ui/sdl2.h
+@@ -104,4 +104,33 @@ void sdl2_gl_release_dmabuf(DisplayChangeListener *dcl,
+ bool sdl2_gl_has_dmabuf(DisplayChangeListener *dcl);
+ void sdl2_gl_console_init(struct sdl2_console *scon);
+ 
++/*
++ * Letterbox calculation shared between mouse input mapping and GL viewport setup.
++ * Computes the on-screen render rectangle when a guest surface (surf_w x surf_h)
++ * is scaled to fit inside a window (win_w x win_h) while preserving aspect ratio.
++ *
++ * Outputs:
++ *   scale   - uniform scale factor (min of win_w/surf_w, win_h/surf_h)
++ *   render_w, render_h - on-screen size of the guest surface (rounded to nearest)
++ *   off_x, off_y - top-left offset of the render rect within the window (rounded)
++ *
++ * All outputs are integers suitable for pixel-accurate coordinate mapping.
++ * Uses round-to-nearest to match GL viewport integer truncation behavior.
++ */
++void sdl2_compute_letterbox(int win_w, int win_h,
++                            int surf_w, int surf_h,
++                            double *scale,
++                            int *render_w, int *render_h,
++                            int *off_x, int *off_y);
++
++/* For 2D renderer: use SDL's authoritative window->logical mapping directly */
++static inline void sdl2_window_to_logical(SDL_Renderer *renderer, int wx, int wy,
++                                          int *lx, int *ly)
++{
++    float fx = 0, fy = 0;
++    SDL_RenderWindowToLogical(renderer, wx, wy, &fx, &fy);
++    *lx = (int)fx;
++    *ly = (int)fy;
++}
++
+ #endif /* SDL2_H */
+diff --git a/ui/console-gl.c b/ui/console-gl.c
+index d4b9017..1dce33b 100644
+--- a/ui/console-gl.c
++++ b/ui/console-gl.c
+@@ -29,6 +29,7 @@
+ #include "qemu/error-report.h"
+ #include "ui/console.h"
+ #include "ui/shader.h"
++#include <math.h>
+ 
+ /* ---------------------------------------------------------------------- */
+ 
+@@ -192,7 +193,8 @@ void surface_gl_setup_viewport(QemuGLShader *gls,
+                                DisplaySurface *surface,
+                                int ww, int wh)
+ {
+-    int gw, gh, stripe;
++    int gw, gh;
++    int render_w, render_h, off_x, off_y;
+     float sw, sh;
+ 
+     assert(gls);
+@@ -200,13 +202,21 @@ void surface_gl_setup_viewport(QemuGLShader *gls,
+     gw = surface_width(surface);
+     gh = surface_height(surface);
+ 
+-    sw = (float)ww/gw;
+-    sh = (float)wh/gh;
++    sw = (float)ww / gw;
++    sh = (float)wh / gh;
+     if (sw < sh) {
+-        stripe = wh - wh*sw/sh;
+-        glViewport(0, stripe / 2, ww, wh - stripe);
++        /* Window is taller relative to guest: scale by width, letterbox top/bottom */
++        render_w = ww;
++        render_h = (int)floor(gh * sw + 0.5f);
++        off_x = 0;
++        off_y = (int)floor((wh - render_h) / 2.0f + 0.5f);
++        glViewport(0, off_y, render_w, render_h);
+     } else {
+-        stripe = ww - ww*sh/sw;
+-        glViewport(stripe / 2, 0, ww - stripe, wh);
++        /* Window is wider relative to guest: scale by height, letterbox left/right */
++        render_w = (int)floor(gw * sh + 0.5f);
++        render_h = wh;
++        off_x = (int)floor((ww - render_w) / 2.0f + 0.5f);
++        off_y = 0;
++        glViewport(off_x, 0, render_w, render_h);
+     }
+-}
++}
+\ No newline at end of file
 diff --git a/ui/sdl2-2d.c b/ui/sdl2-2d.c
-index 7305238..09488b0 100644
+index 7305238..794c96c 100644
 --- a/ui/sdl2-2d.c
 +++ b/ui/sdl2-2d.c
 @@ -48,9 +48,37 @@ void sdl2_2d_update(DisplayChangeListener *dcl,
@@ -159,3 +249,349 @@ index 7305238..09488b0 100644
      scon->texture = SDL_CreateTexture(scon->real_renderer, format,
                                        SDL_TEXTUREACCESS_STREAMING,
                                        surface_width(new_surface),
+diff --git a/ui/sdl2-gl.c b/ui/sdl2-gl.c
+index bb066cd..0dd2cc8 100644
+--- a/ui/sdl2-gl.c
++++ b/ui/sdl2-gl.c
+@@ -247,7 +247,46 @@ void sdl2_gl_scanout_flush(DisplayChangeListener *dcl,
+     SDL_GL_MakeCurrent(scon->real_window, scon->winctx);
+ 
+     SDL_GetWindowSize(scon->real_window, &ww, &wh);
+-    egl_fb_setup_default(&scon->win_fb, ww, wh, 0, 0);
++
++    /*
++     * Apply aspect-ratio-preserving letterbox so the rendered output
++     * matches the coordinate mapping used by handle_mousemotion() and
++     * handle_mousebutton() (both use sdl2_compute_letterbox()).
++     *
++     * Previously we set win_fb to (ww, wh, 0, 0) which stretched the
++     * guest framebuffer to fill the entire window.  When the window
++     * aspect ratio differed from the guest's, the mouse input code's
++     * letterbox offsets no longer matched the actual rendering, causing
++     * the input coordinates to be offset from the visible content.
++     *
++     * The guest framebuffer dimensions are scon->guest_fb.width/height
++     * (the scanout texture size, set by sdl2_gl_scanout_texture).
++     */
++    int guest_w = scon->guest_fb.width;
++    int guest_h = scon->guest_fb.height;
++
++    if (guest_w > 0 && guest_h > 0) {
++        double scale_w = (double)ww / guest_w;
++        double scale_h = (double)wh / guest_h;
++        double s = scale_w < scale_h ? scale_w : scale_h;
++
++        int render_w = (int)(guest_w * s + 0.5);
++        int render_h = (int)(guest_h * s + 0.5);
++        int off_x = (ww - render_w) / 2;
++        int off_y = (wh - render_h) / 2;
++
++        /* Clear the whole window first so letterbox bars are black */
++        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
++        glViewport(0, 0, ww, wh);
++        glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
++        glClear(GL_COLOR_BUFFER_BIT);
++
++        /* Blit guest fb into the letterboxed sub-rect of the window */
++        egl_fb_setup_default(&scon->win_fb, render_w, render_h, off_x, off_y);
++    } else {
++        egl_fb_setup_default(&scon->win_fb, ww, wh, 0, 0);
++    }
++
+     egl_fb_blit(&scon->win_fb, &scon->guest_fb, !scon->y0_top);
+ 
+     SDL_GL_SwapWindow(scon->real_window);
+diff --git a/ui/sdl2.c b/ui/sdl2.c
+index aaaede5..2f4d2e2 100644
+--- a/ui/sdl2.c
++++ b/ui/sdl2.c
+@@ -38,6 +38,7 @@
+ #ifdef CONFIG_X11
+ #include <X11/Xlib.h>
+ #endif
++#include <math.h>
+ 
+ static int sdl2_num_outputs;
+ static struct sdl2_console *sdl2_console;
+@@ -249,6 +250,10 @@ static void sdl_show_cursor(struct sdl2_console *scon)
+ static void sdl_grab_start(struct sdl2_console *scon)
+ {
+     QemuConsole *con = scon ? scon->dcl.con : NULL;
++    int scr_w, scr_h, surf_w, surf_h;
++    double scale;
++    int render_w, render_h, off_x, off_y;
++    int wx, wy;
+ 
+     if (!con || !qemu_console_is_graphic(con)) {
+         return;
+@@ -264,7 +269,27 @@ static void sdl_grab_start(struct sdl2_console *scon)
+     if (guest_cursor) {
+         SDL_SetCursor(guest_sprite);
+         if (!qemu_input_is_absolute(scon->dcl.con) && !absolute_enabled) {
+-            SDL_WarpMouseInWindow(scon->real_window, guest_x, guest_y);
++            /* Convert guest surface coordinates to window coordinates */
++            surf_w = surface_width(scon->surface);
++            surf_h = surface_height(scon->surface);
++            SDL_GetWindowSize(scon->real_window, &scr_w, &scr_h);
++            sdl2_compute_letterbox(scr_w, scr_h, surf_w, surf_h,
++                                   &scale, &render_w, &render_h,
++                                   &off_x, &off_y);
++            /* GL Y-flip handling for cursor warping (guest→window):
++             * - Scanout mode: egl_fb_blit uses flip = !y0_top.
++             *   When y0_top=false (guest Y=0 at bottom), the blit flips so that
++             *   guest Y=0 appears at window top. Warping uses same mapping:
++             *   guest Y=0 → window top (off_y). NO flip needed.
++             * - Normal GL mode: NO flip, direct mapping. */
++#ifdef CONFIG_OPENGL
++            /* No Y-flip needed for either mode - both render with guest Y=0 at window top */
++            wy = (int)floor(guest_y * scale + off_y + 0.5);
++#else
++            wy = (int)floor(guest_y * scale + off_y + 0.5);
++#endif
++            wx = (int)floor(guest_x * scale + off_x + 0.5);
++            SDL_WarpMouseInWindow(scon->real_window, wx, wy);
+         }
+     } else {
+         sdl_hide_cursor(scon);
+@@ -310,6 +335,36 @@ static void sdl_mouse_mode_change(Notifier *notify, void *data)
+     }
+ }
+ 
++/*
++ * Shared letterbox calculation for both mouse input and GL viewport.
++ * Uses round-to-nearest for render size and offset to match GL viewport
++ * integer truncation behavior as closely as possible.
++ */
++void sdl2_compute_letterbox(int win_w, int win_h,
++                            int surf_w, int surf_h,
++                            double *scale,
++                            int *render_w, int *render_h,
++                            int *off_x, int *off_y)
++{
++    double scale_w = (double)win_w / surf_w;
++    double scale_h = (double)win_h / surf_h;
++    double s = scale_w < scale_h ? scale_w : scale_h;
++
++    /* Round to nearest integer to match GL viewport behavior */
++    int rw = (int)floor(surf_w * s + 0.5);
++    int rh = (int)floor(surf_h * s + 0.5);
++
++    /* Center the render rect; round offset to nearest */
++    int ox = (int)floor((win_w - rw) / 2.0 + 0.5);
++    int oy = (int)floor((win_h - rh) / 2.0 + 0.5);
++
++    *scale = s;
++    *render_w = rw;
++    *render_h = rh;
++    *off_x = ox;
++    *off_y = oy;
++}
++
+ static void sdl_send_mouse_event(struct sdl2_console *scon, int dx, int dy,
+                                  int x, int y, int state)
+ {
+@@ -333,13 +388,27 @@ static void sdl_send_mouse_event(struct sdl2_console *scon, int dx, int dy,
+         qemu_input_queue_abs(scon->dcl.con, INPUT_AXIS_Y,
+                              y, 0, surface_height(scon->surface));
+     } else {
++        /*
++         * Relative device (usb-mouse): the guest expects *relative* deltas.
++         * In grabbed mode SDL reports raw cursor deltas in xrel/yrel and the
++         * absolute motion.x/y is unreliable (it sits at the grab origin or
++         * clamps to edges). So send the scaled relative deltas directly and
++         * keep an internal surface-space position only for cursor placement.
++         */
+         if (guest_cursor) {
+-            x -= guest_x;
+-            y -= guest_y;
+-            guest_x += x;
+-            guest_y += y;
+-            dx = x;
+-            dy = y;
++            guest_x += dx;
++            guest_y += dy;
++            if (guest_x < 0) { guest_x = 0; }
++            else if (guest_x > surface_width(scon->surface) - 1) {
++                guest_x = surface_width(scon->surface) - 1;
++            }
++            if (guest_y < 0) { guest_y = 0; }
++            else if (guest_y > surface_height(scon->surface) - 1) {
++                guest_y = surface_height(scon->surface) - 1;
++            }
++            if (!gui_grab) {
++                SDL_WarpMouseInWindow(scon->real_window, guest_x, guest_y);
++            }
+         }
+         qemu_input_queue_rel(scon->dcl.con, INPUT_AXIS_X, dx);
+         qemu_input_queue_rel(scon->dcl.con, INPUT_AXIS_Y, dy);
+@@ -498,18 +567,22 @@ static void handle_mousemotion(SDL_Event *ev)
+     int max_x, max_y;
+     struct sdl2_console *scon = get_scon_from_window(ev->motion.windowID);
+     int scr_w, scr_h, surf_w, surf_h, x, y, dx, dy;
++    double scale;
++    int render_w, render_h, off_x, off_y;
+ 
+     if (!scon || !qemu_console_is_graphic(scon->dcl.con)) {
+         return;
+     }
+ 
+     SDL_GetWindowSize(scon->real_window, &scr_w, &scr_h);
++    surf_w = surface_width(scon->surface);
++    surf_h = surface_height(scon->surface);
+     if (qemu_input_is_absolute(scon->dcl.con) || absolute_enabled) {
+-        max_x = scr_w - 1;
+-        max_y = scr_h - 1;
++        max_x = (!scon->opengl && scon->real_renderer) ? (surf_w - 1) : (scr_w - 1);
++        max_y = (!scon->opengl && scon->real_renderer) ? (surf_h - 1) : (scr_h - 1);
+         if (gui_grab && !gui_fullscreen
+-            && (ev->motion.x == 0 || ev->motion.y == 0 ||
+-                ev->motion.x == max_x || ev->motion.y == max_y)) {
++            && (ev->motion.x <= 0 || ev->motion.y <= 0 ||
++                ev->motion.x >= max_x || ev->motion.y >= max_y)) {
+             sdl_grab_end(scon);
+         }
+         if (!gui_grab &&
+@@ -518,12 +591,50 @@ static void handle_mousemotion(SDL_Event *ev)
+             sdl_grab_start(scon);
+         }
+     }
+-    surf_w = surface_width(scon->surface);
+-    surf_h = surface_height(scon->surface);
+-    x = (int64_t)ev->motion.x * surf_w / scr_w;
+-    y = (int64_t)ev->motion.y * surf_h / scr_h;
+-    dx = (int64_t)ev->motion.xrel * surf_w / scr_w;
+-    dy = (int64_t)ev->motion.yrel * surf_h / scr_h;
++
++    /*
++     * The guest framebuffer is scaled to fit inside the window while
++     * preserving aspect ratio (letterboxing).
++     * In 2D mode, SDL_RenderSetLogicalSize() is active on scon->real_renderer.
++     * SDL2's event subsystem automatically converts ev->motion.x/y and
++     * bev->x/y from window coordinates to logical guest coordinates
++     * [0..surf_w, 0..surf_h]. Do NOT call SDL_RenderWindowToLogical()
++     * here, as that would apply the letterbox transformation a second time!
++     * In GL mode, events are in raw window coordinates, so we compute the
++     * letterbox inverse mapping manually.
++     */
++    if (!scon->opengl && scon->real_renderer) {
++        /* 2D mode: ev->motion.x and y are ALREADY in logical guest coordinates */
++        x = ev->motion.x;
++        y = ev->motion.y;
++        dx = ev->motion.xrel;
++        dy = ev->motion.yrel;
++    } else {
++        /* GL mode (or fallback): use shared letterbox calculation */
++        sdl2_compute_letterbox(scr_w, scr_h, surf_w, surf_h,
++                               &scale, &render_w, &render_h, &off_x, &off_y);
++        x = (int64_t)((ev->motion.x - off_x) / scale);
++        y = (int64_t)((ev->motion.y - off_y) / scale);
++        dx = (int64_t)(ev->motion.xrel / scale);
++        dy = (int64_t)(ev->motion.yrel / scale);
++
++        /* GL Y-flip handling to match rendering:
++         * - Scanout mode: egl_fb_blit uses flip = !y0_top.
++         *   When y0_top=false (guest Y=0 at bottom), the blit flips so that
++         *   guest Y=0 appears at window top. The rendered output matches
++         *   window coordinates (Y=0 at top), so mouse input needs NO flip.
++         * - Normal GL mode: NO Y-flip needed.
++         *   The shader flip corrects OpenGL texture coords, but output shows
++         *   guest Y=0 at window top (same as window coords). */
++        /* No Y-flip needed for either mode - both render with guest Y=0 at window top */
++    }
++
++    /* Clamp into the guest framebuffer: clicks in the letterbox bars (outside
++     * the letterboxed render rect) must not wrap around or go negative when
++     * the window aspect does not match the guest's. */
++    if (x < 0) { x = 0; } else if (x > surf_w - 1) { x = surf_w - 1; }
++    if (y < 0) { y = 0; } else if (y > surf_h - 1) { y = surf_h - 1; }
++
+     if (gui_grab || qemu_input_is_absolute(scon->dcl.con) || absolute_enabled) {
+         sdl_send_mouse_event(scon, dx, dy, x, y, ev->motion.state);
+     }
+@@ -535,6 +646,9 @@ static void handle_mousebutton(SDL_Event *ev)
+     SDL_MouseButtonEvent *bev;
+     struct sdl2_console *scon = get_scon_from_window(ev->button.windowID);
+     int scr_w, scr_h, x, y;
++    double scale;
++    int render_w, render_h, off_x, off_y;
++    int surf_w, surf_h;
+ 
+     if (!scon || !qemu_console_is_graphic(scon->dcl.con)) {
+         return;
+@@ -542,8 +656,34 @@ static void handle_mousebutton(SDL_Event *ev)
+ 
+     bev = &ev->button;
+     SDL_GetWindowSize(scon->real_window, &scr_w, &scr_h);
+-    x = (int64_t)bev->x * surface_width(scon->surface) / scr_w;
+-    y = (int64_t)bev->y * surface_height(scon->surface) / scr_h;
++    surf_w = surface_width(scon->surface);
++    surf_h = surface_height(scon->surface);
++
++    /* In 2D mode, bev->x and bev->y are ALREADY in logical guest coordinates */
++    if (!scon->opengl && scon->real_renderer) {
++        x = bev->x;
++        y = bev->y;
++    } else {
++        /* GL mode (or fallback): use shared letterbox calculation */
++        sdl2_compute_letterbox(scr_w, scr_h, surf_w, surf_h,
++                               &scale, &render_w, &render_h, &off_x, &off_y);
++        x = (int64_t)((bev->x - off_x) / scale);
++        y = (int64_t)((bev->y - off_y) / scale);
++
++        /* GL Y-flip handling to match rendering:
++         * - Scanout mode: egl_fb_blit uses flip = !y0_top.
++         *   When y0_top=false (guest Y=0 at bottom), the blit flips so that
++         *   guest Y=0 appears at window top. The rendered output matches
++         *   window coordinates (Y=0 at top), so mouse input needs NO flip.
++         * - Normal GL mode: NO Y-flip needed.
++         *   The shader flip corrects OpenGL texture coords, but output shows
++         *   guest Y=0 at window top (same as window coords). */
++        /* No Y-flip needed for either mode - both render with guest Y=0 at window top */
++    }
++
++    /* Clamp into the guest framebuffer */
++    if (x < 0) { x = 0; } else if (x > surf_w - 1) { x = surf_w - 1; }
++    if (y < 0) { y = 0; } else if (y > surf_h - 1) { y = surf_h - 1; }
+ 
+     if (!gui_grab && !qemu_input_is_absolute(scon->dcl.con)) {
+         if (ev->type == SDL_MOUSEBUTTONUP && bev->button == SDL_BUTTON_LEFT) {
+@@ -732,6 +872,10 @@ static void sdl_mouse_warp(DisplayChangeListener *dcl,
+                            int x, int y, bool on)
+ {
+     struct sdl2_console *scon = container_of(dcl, struct sdl2_console, dcl);
++    int scr_w, scr_h, surf_w, surf_h;
++    double scale;
++    int render_w, render_h, off_x, off_y;
++    int wx, wy;
+ 
+     if (!qemu_console_is_graphic(scon->dcl.con)) {
+         return;
+@@ -744,7 +888,27 @@ static void sdl_mouse_warp(DisplayChangeListener *dcl,
+         if (gui_grab || qemu_input_is_absolute(scon->dcl.con) || absolute_enabled) {
+             SDL_SetCursor(guest_sprite);
+             if (!qemu_input_is_absolute(scon->dcl.con) && !absolute_enabled) {
+-                SDL_WarpMouseInWindow(scon->real_window, x, y);
++                /* Convert guest surface coordinates to window coordinates */
++                surf_w = surface_width(scon->surface);
++                surf_h = surface_height(scon->surface);
++                SDL_GetWindowSize(scon->real_window, &scr_w, &scr_h);
++                sdl2_compute_letterbox(scr_w, scr_h, surf_w, surf_h,
++                                       &scale, &render_w, &render_h,
++                                       &off_x, &off_y);
++                /* GL Y-flip handling for cursor warping (guest→window):
++                 * - Scanout mode: egl_fb_blit uses flip = !y0_top.
++                 *   When y0_top=false (guest Y=0 at bottom), the blit flips so that
++                 *   guest Y=0 appears at window top. Warping uses same mapping:
++                 *   guest Y=0 → window top (off_y). NO flip needed.
++                 * - Normal GL mode: NO flip, direct mapping. */
++#ifdef CONFIG_OPENGL
++                /* No Y-flip needed for either mode - both render with guest Y=0 at window top */
++                wy = (int)floor(y * scale + off_y + 0.5);
++#else
++                wy = (int)floor(y * scale + off_y + 0.5);
++#endif
++                wx = (int)floor(x * scale + off_x + 0.5);
++                SDL_WarpMouseInWindow(scon->real_window, wx, wy);
+             }
+         }
+     } else if (gui_grab) {
