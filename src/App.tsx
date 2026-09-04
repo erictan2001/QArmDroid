@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import RFB from "@novnc/novnc";
 import "./App.css";
 
@@ -9,6 +10,22 @@ interface EmulatorStatus {
   adb_ready: boolean;
   boot_completed: boolean;
   scrcpy_running: boolean;
+}
+
+interface ImageConfig {
+  installed: boolean;
+  provisioned: boolean;
+  disk_size_gb: number;
+  fs_format: string;
+  runtime_root: string;
+}
+
+interface ProvisionProgress {
+  percent: number;
+  stage: string;
+  message: string;
+  done: boolean;
+  error: boolean;
 }
 
 export function App() {
@@ -34,6 +51,43 @@ export function App() {
     visible: false,
   });
 
+  // --- Image setup / provisioning state ---
+  const [imageConfig, setImageConfig] = useState<ImageConfig>({
+    installed: false,
+    provisioned: false,
+    disk_size_gb: 16,
+    fs_format: "ext4",
+    runtime_root: "",
+  });
+  const [showConfig, setShowConfig] = useState<boolean>(false);
+  const [provision, setProvision] = useState<ProvisionProgress>({
+    percent: 0,
+    stage: "",
+    message: "",
+    done: false,
+    error: false,
+  });
+  const [provisioning, setProvisioning] = useState<boolean>(false);
+  const [configDraft, setConfigDraft] = useState<{ sizeGb: number; fs: string }>({
+    sizeGb: 16,
+    fs: "ext4",
+  });
+
+  const loadImageConfig = async () => {
+    try {
+      const cfg = await invoke<ImageConfig>("get_image_config");
+      setImageConfig(cfg);
+      setConfigDraft({ sizeGb: cfg.disk_size_gb || 16, fs: cfg.fs_format || "ext4" });
+      // First run and not yet provisioned -> open the setup gate automatically.
+      if (!cfg.provisioned && !showConfig) {
+        setShowConfig(true);
+      }
+    } catch {
+      // Dev repo without the command: assume provisioned to not block launch.
+      setImageConfig((c) => ({ ...c, provisioned: true }));
+    }
+  };
+
   // Check emulator status periodically
   const checkStatus = async () => {
     try {
@@ -46,11 +100,30 @@ export function App() {
   };
 
   useEffect(() => {
+    loadImageConfig();
     const timer = setInterval(() => {
       checkStatus();
     }, 1500);
     checkStatus();
     return () => clearInterval(timer);
+  }, []);
+
+  // Listen for real-time provisioning progress from the Rust host.
+  useEffect(() => {
+    const unlisten = listen<ProvisionProgress>("provision-progress", (event) => {
+      const p = event.payload;
+      setProvision(p);
+      if (!p.done && !p.error) setProvisioning(true);
+      if (p.done) {
+        setProvisioning(false);
+        if (!p.error) {
+          loadImageConfig();
+        }
+      }
+    });
+    return () => {
+      unlisten.then((fn) => fn()).catch(() => {});
+    };
   }, []);
 
   const handleLaunchScrcpy = async () => {
@@ -93,14 +166,81 @@ export function App() {
       // when the daemon wasn't deployed -> touch appeared broken.)
       rfb.viewOnly = false;
       rfb.background = "#0f172a";
+      // Blue dot cursor: noVNC hides the OS cursor over the canvas and draws
+      // its own dot at the pointer location, so the user always sees where the
+      // next tap will land (Android-emulator style touch indicator). The
+      // property exists at runtime (core/rfb.js) but is missing from the
+      // package's loose typings, so cast to a minimal shape.
+      (rfb as RFB & { showDotCursor: boolean }).showDotCursor = true;
 
       rfb.addEventListener("connect", () => {
         setConnecting(false);
         setConnected(true);
         setLogMsg("Connected to Android display — VNC input active");
+
+        // Native listeners on the RFB canvas: noVNC calls setPointerCapture on
+        // the canvas on mousedown (rfb.js), which retargets all pointermove
+        // events to the canvas - the wrapper's React handlers never see them
+        // during a drag, so the blue circle would stick at the click point.
+        // Attaching natively to the canvas itself lets the ripple ALWAYS
+        // follow the cursor (hover + drag), independent of capture.
+        const canvas = screenRef.current?.querySelector("canvas");
+        if (canvas && !(canvas as any).__qarm_ripple_bound) {
+          (canvas as any).__qarm_ripple_bound = true;
+          const onMove = (pe: PointerEvent) => {
+            const coords = getGuestCoords(pe.clientX, pe.clientY);
+            if (coords) {
+              // Always update position, but only show during active press
+              setTouchFeedback({
+                x: coords.screenX,
+                y: coords.screenY,
+                visible: isPointerDownRef.current
+              });
+            }
+          };
+          const onDown = (pe: PointerEvent) => {
+            const coords = getGuestCoords(pe.clientX, pe.clientY);
+            if (coords) {
+              isPointerDownRef.current = true;
+              setTouchFeedback({ x: coords.screenX, y: coords.screenY, visible: true });
+            }
+          };
+          const onUp = () => {
+            isPointerDownRef.current = false;
+            setTouchFeedback((prev) => ({ ...prev, visible: false }));
+          };
+          const onLeave = () => {
+            // Don't hide on leave/cancel - pointer might briefly leave during drag
+            // Only hide on explicit pointerup
+          };
+          canvas.addEventListener("pointermove", onMove);
+          canvas.addEventListener("pointerover", onMove);
+          canvas.addEventListener("pointerdown", onDown);
+          canvas.addEventListener("pointerup", onUp);
+          // Don't hide on leave/cancel - pointer might briefly leave during drag
+          // canvas.addEventListener("pointerleave", onLeave);
+          // canvas.addEventListener("pointercancel", onLeave);
+          // Store cleanup function for disconnect
+          (canvas as any).__qarm_ripple_cleanup = () => {
+            canvas.removeEventListener("pointermove", onMove);
+            canvas.removeEventListener("pointerover", onMove);
+            canvas.removeEventListener("pointerdown", onDown);
+            canvas.removeEventListener("pointerup", onUp);
+            canvas.removeEventListener("pointerleave", onLeave);
+            canvas.removeEventListener("pointercancel", onLeave);
+          };
+        }
       });
 
       rfb.addEventListener("disconnect", (e: any) => {
+        setConnecting(false);
+        setConnected(false);
+        // Clean up native canvas listeners
+        const canvas = screenRef.current?.querySelector("canvas");
+        if (canvas && (canvas as any).__qarm_ripple_cleanup) {
+          (canvas as any).__qarm_ripple_cleanup();
+          delete (canvas as any).__qarm_ripple_cleanup;
+        }
         setConnecting(false);
         setConnected(false);
         rfbRef.current = null;
@@ -170,9 +310,18 @@ export function App() {
 
   const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     // Embedded mode: noVNC (viewOnly=false) relays pointer events over VNC
-    // to the guest's USB tablet. Do NOT also dispatch via the touch daemon
-    // (would double-input). The daemon handlers are only for SDL/scrcpy.
-    if (displayMode === "embedded" && connected) return;
+    // to the guest's USB tablet. Do NOT dispatch via the touch daemon (would
+    // double-input), but mirror the SDL/scrcpy feedback pattern: show the
+    // blue ripple where the press lands and track the drag so the circle
+    // never sticks at a previous click position.
+    if (displayMode === "embedded") {
+      const coords = getGuestCoords(e.clientX, e.clientY);
+      if (coords) {
+        isPointerDownRef.current = true;
+        setTouchFeedback({ x: coords.screenX, y: coords.screenY, visible: true });
+      }
+      return;
+    }
     if (!connected || e.button !== 0) return;
     const coords = getGuestCoords(e.clientX, e.clientY);
     if (!coords) return;
@@ -187,7 +336,18 @@ export function App() {
   };
 
   const handlePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
-    if (displayMode === "embedded" && connected) return;
+    // Embedded: while pressed, follow the pointer with the blue circle (same
+    // as SDL/scrcpy). On hover noVNC draws its own dot cursor, so nothing to
+    // track here - this keeps the two indicators in sync.
+    if (displayMode === "embedded") {
+      if (isPointerDownRef.current) {
+        const coords = getGuestCoords(e.clientX, e.clientY);
+        if (coords) {
+          setTouchFeedback({ x: coords.screenX, y: coords.screenY, visible: true });
+        }
+      }
+      return;
+    }
     if (!isPointerDownRef.current) return;
     const coords = getGuestCoords(e.clientX, e.clientY);
     if (!coords) return;
@@ -197,7 +357,12 @@ export function App() {
   };
 
   const handlePointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
-    if (displayMode === "embedded" && connected) return;
+    // Embedded: release hides the ripple, exactly like the daemon path.
+    if (displayMode === "embedded") {
+      isPointerDownRef.current = false;
+      setTouchFeedback((prev) => ({ ...prev, visible: false }));
+      return;
+    }
     if (!isPointerDownRef.current) return;
     isPointerDownRef.current = false;
     setTouchFeedback((prev) => ({ ...prev, visible: false }));
@@ -222,6 +387,11 @@ export function App() {
   };
 
   const handleStart = async () => {
+    if (!imageConfig.provisioned) {
+      setLogMsg("Install the Android image first (Configure Image → Install).");
+      setShowConfig(true);
+      return;
+    }
     setLogMsg(`Launching Android VM in ${displayMode} mode...`);
     try {
       const msg = await invoke<string>("start_emulator", { displayMode });
@@ -234,6 +404,53 @@ export function App() {
     } catch (e) {
       setLogMsg(`Failed to launch: ${e}`);
     }
+  };
+
+  // --- Image setup handlers ---
+  const openConfig = async () => {
+    await loadImageConfig();
+    setShowConfig(true);
+  };
+
+  const saveConfigDraft = async () => {
+    try {
+      const cfg = await invoke<ImageConfig>("save_image_config", {
+        diskSizeGb: configDraft.sizeGb,
+        fsFormat: configDraft.fs,
+      });
+      setImageConfig(cfg);
+    } catch (e) {
+      setLogMsg(`Could not save image config: ${e}`);
+    }
+  };
+
+  const handleProvision = async (force: boolean) => {
+    // Persist the chosen size/format before building.
+    await saveConfigDraft();
+    setProvisioning(true);
+    setProvision({
+      percent: 0,
+      stage: "Starting",
+      message: "Preparing to install the Android image...",
+      done: false,
+      error: false,
+    });
+    try {
+      const msg = await invoke<string>("provision_image", {
+        force,
+        diskSizeGb: configDraft.sizeGb,
+        fsFormat: configDraft.fs,
+      });
+      setLogMsg(msg);
+    } catch (e) {
+      setLogMsg(`Provisioning error: ${e}`);
+      setProvisioning(false);
+    }
+  };
+
+  const closeConfig = () => {
+    if (provisioning) return; // don't allow closing mid-build
+    setShowConfig(false);
   };
 
   const handleStop = async () => {
@@ -276,6 +493,21 @@ export function App() {
 
   return (
     <div className="app-container">
+      {/* Android Image Setup overlay (install / update disk size / format) */}
+      {showConfig && (
+        <ImageConfigPanel
+          config={imageConfig}
+          draft={configDraft}
+          setDraft={setConfigDraft}
+          provisioning={provisioning}
+          provision={provision}
+          onInstall={() => handleProvision(false)}
+          onForceReinstall={() => handleProvision(true)}
+          onSave={saveConfigDraft}
+          onClose={closeConfig}
+        />
+      )}
+
       {/* Top Header / Status Bar */}
       <header className="top-header">
         <div className="brand">
@@ -348,12 +580,18 @@ export function App() {
           )}
 
           {!status.running ? (
-            <button className="btn btn-primary" onClick={handleStart}>
+            <button className="btn btn-primary" onClick={handleStart} disabled={!imageConfig.provisioned}>
               ▶ Launch Emulator
             </button>
           ) : (
             <button className="btn btn-danger" onClick={handleStop}>
               ■ Stop Emulator
+            </button>
+          )}
+
+          {!status.running && (
+            <button className="btn btn-secondary" onClick={openConfig} title="Install or reconfigure the Android image (disk size, filesystem)">
+              ⚙ Configure Image
             </button>
           )}
 
@@ -549,6 +787,178 @@ export function App() {
           </span>
         </div>
       </footer>
+    </div>
+  );
+}
+
+// -----------------------------------------------------------------------------
+// Android Image Setup panel: install / update the runtime, choose disk size and
+// userdata filesystem. Long operations stream real progress from the Rust host.
+// -----------------------------------------------------------------------------
+interface ImageConfigPanelProps {
+  config: ImageConfig;
+  draft: { sizeGb: number; fs: string };
+  setDraft: React.Dispatch<React.SetStateAction<{ sizeGb: number; fs: string }>>;
+  provisioning: boolean;
+  provision: ProvisionProgress;
+  onInstall: () => void;
+  onForceReinstall: () => void;
+  onSave: () => void;
+  onClose: () => void;
+}
+
+const DISK_SIZES = [16, 32, 64, 128];
+
+function ImageConfigPanel({
+  config,
+  draft,
+  setDraft,
+  provisioning,
+  provision,
+  onInstall,
+  onForceReinstall,
+  onSave,
+  onClose,
+}: ImageConfigPanelProps) {
+  const showProgress = provisioning || provision.done || provision.percent > 0;
+  const pct = Math.max(0, Math.min(100, provision.percent));
+
+  return (
+    <div className="config-overlay">
+      <div className="config-panel">
+        <div className="config-head">
+          <div>
+            <h2>🤖 Android Image Setup</h2>
+            <p className="config-sub">
+              Install the ARM64 Android image and configure its virtual disk before launching the emulator.
+            </p>
+          </div>
+          {!provisioning && (
+            <button className="config-close" onClick={onClose} title="Close">
+              ✕
+            </button>
+          )}
+        </div>
+
+        <div className="config-status-row">
+          <span className={`status-chip ${config.installed ? "ok" : "warn"}`}>
+            Runtime: {config.installed ? "Present" : "Missing"}
+          </span>
+          <span className={`status-chip ${config.provisioned ? "ok" : "warn"}`}>
+            Image: {config.provisioned ? "Installed" : "Not installed"}
+          </span>
+          {config.runtime_root && (
+            <span className="status-chip muted" title={config.runtime_root}>
+              {config.runtime_root.length > 42
+                ? "…" + config.runtime_root.slice(-40)
+                : config.runtime_root}
+            </span>
+          )}
+        </div>
+
+        <div className="config-grid">
+          {/* Disk size */}
+          <section className="config-section">
+            <span className="section-title">Userdata Disk Size</span>
+            <p className="section-help">
+              Space allocated for Android apps &amp; data (virtual GPT partition).
+            </p>
+            <div className="seg-control">
+              {DISK_SIZES.map((gb) => (
+                <button
+                  key={gb}
+                  className={`seg-btn ${draft.sizeGb === gb ? "active" : ""}`}
+                  disabled={provisioning}
+                  onClick={() => setDraft((d) => ({ ...d, sizeGb: gb }))}
+                >
+                  {gb} GB
+                </button>
+              ))}
+            </div>
+          </section>
+
+          {/* Filesystem format */}
+          <section className="config-section">
+            <span className="section-title">Userdata Filesystem</span>
+            <p className="section-help">
+              Format used for the <code>/data</code> partition on first boot.
+            </p>
+            <div className="seg-control">
+              <button
+                className={`seg-btn ${draft.fs === "ext4" ? "active" : ""}`}
+                disabled={provisioning}
+                onClick={() => setDraft((d) => ({ ...d, fs: "ext4" }))}
+              >
+                ext4
+                <small>Stable, widely compatible</small>
+              </button>
+              <button
+                className={`seg-btn ${draft.fs === "f2fs" ? "active" : ""}`}
+                disabled={provisioning}
+                onClick={() => setDraft((d) => ({ ...d, fs: "f2fs" }))}
+              >
+                f2fs
+                <small>Flash-optimized, faster on SSD</small>
+              </button>
+            </div>
+          </section>
+        </div>
+
+        {/* Progress */}
+        {showProgress && (
+          <div className="config-progress">
+            <div className="progress-track">
+              <div
+                className={`progress-fill ${provision.error ? "error" : provision.done ? "done" : ""}`}
+                style={{ width: `${pct}%` }}
+              />
+            </div>
+            <div className="progress-meta">
+              <span className={`progress-stage ${provision.error ? "err" : ""}`}>
+                {provision.error ? "❌ " : provision.done ? "✅ " : ""}
+                {provision.stage || "Working…"}
+              </span>
+              <span className="progress-pct">{pct}%</span>
+            </div>
+            {provision.message && (
+              <div className="progress-log">{provision.message}</div>
+            )}
+          </div>
+        )}
+
+        {/* Actions */}
+        <div className="config-actions">
+          <button
+            className="btn btn-primary btn-large"
+            disabled={provisioning}
+            onClick={onInstall}
+          >
+            {config.provisioned ? "⤓ Update / Rebuild Image" : "▼ Install Android Image"}
+          </button>
+          {config.provisioned && (
+            <button
+              className="btn btn-secondary"
+              disabled={provisioning}
+              onClick={onForceReinstall}
+              title="Force re-copy QEMU/image and rebuild disk.raw"
+            >
+              ⟳ Force Reinstall
+            </button>
+          )}
+          {!provisioning && (
+            <button className="btn btn-secondary" onClick={onSave} title="Save size/format selection">
+              💾 Save Settings
+            </button>
+          )}
+        </div>
+
+        {!config.provisioned && !provisioning && (
+          <p className="config-note">
+            First time? Click <strong>Install Android Image</strong>. This copies the emulator engine
+            and builds the virtual disk (can take several minutes) — progress is shown above.
+          </p>
+        )}
+      </div>
     </div>
   );
 }

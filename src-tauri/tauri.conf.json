@@ -5,13 +5,14 @@
   "identifier": "com.erict.qarmdroid",
   "build": {
     "beforeDevCommand": "npm run dev",
-    "devUrl": "http://localhost:1420",
+    "devUrl": "http://127.0.0.1:1420",
     "beforeBuildCommand": "npm run build",
     "frontendDist": "../dist"
   },
   "app": {
     "windows": [
       {
+        "label": "main",
         "title": "QArmDroid",
         "width": 1360,
         "height": 880,
@@ -30,7 +31,8 @@
     "resources": [
       "resources/qemu/**/*",
       "resources/image/**/*",
-      "resources/tools/**/*"
+      "resources/tools/**/*",
+      "resources/python/**/*"
     ],
     "icon": [
       "icons/32x32.png",
@@ -38,6 +40,7 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "windows": {}
   }
 }

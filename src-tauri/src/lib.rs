@@ -1,12 +1,14 @@
-use std::io::Write;
+use std::fs;
+use std::io::{BufRead, Write};
 use std::net::{SocketAddr, TcpStream};
-use std::path::PathBuf;
-use std::process::{Child, Command};
+use std::path::{Path, PathBuf};
+use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::{channel, Sender};
 use std::sync::{Mutex, OnceLock};
 use std::thread;
 use std::time::Duration;
 use serde::Serialize;
+use tauri::Emitter;
 
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
@@ -16,6 +18,29 @@ use std::os::windows::process::CommandExt;
 // A GUI app must set this on ALL child processes or the user sees windows
 // popping up constantly (esp. the 1.5s status poll spawning adb).
 const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+/// Recursively copy a directory
+#[allow(dead_code)]
+fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<(), String> {
+    if !src.exists() {
+        return Err(format!("Source directory does not exist: {}", src.display()));
+    }
+    
+    fs::create_dir_all(dst).map_err(|e| format!("Failed to create dest dir: {}", e))?;
+    
+    for entry in fs::read_dir(src).map_err(|e| format!("Failed to read dir: {}", e))? {
+        let entry = entry.map_err(|e| format!("Failed to read dir entry: {}", e))?;
+        let src_path = entry.path();
+        let dst_path = dst.join(entry.file_name());
+        
+        if entry.file_type().map_err(|e| format!("Failed to get file type: {}", e))?.is_dir() {
+            copy_dir_recursive(&src_path, &dst_path)?;
+        } else {
+            fs::copy(&src_path, &dst_path).map_err(|e| format!("Failed to copy file: {}", e))?;
+        }
+    }
+    Ok(())
+}
 
 fn silent_command(program: impl AsRef<std::ffi::OsStr>) -> Command {
     let mut cmd = Command::new(program);
@@ -73,14 +98,131 @@ fn run_with_timeout(cmd: &mut Command, timeout: Duration) -> std::process::Outpu
     }
     std::process::Output { status, stdout: buf_out, stderr: buf_err }
 }
-
-#[derive(Serialize)]
+#[derive(Serialize, Clone, Debug)]
 struct EmulatorStatus {
     running: bool,
     vnc_ready: bool,
     adb_ready: bool,
     boot_completed: bool,
     scrcpy_running: bool,
+}
+
+/// Progress update emitted to the frontend while provisioning the Android
+/// image. `percent` is 0..=100, `stage` is a short human label, `done`/`error`
+/// flag terminal states.
+#[derive(Serialize, Clone, Debug)]
+struct ProvisionProgress {
+    percent: u32,
+    stage: String,
+    message: String,
+    done: bool,
+    error: bool,
+}
+
+/// Persisted image configuration (mirrors tools/provision_bundle.ps1 output
+/// of image_config.json). Returned to the UI so it can prefill the setup form.
+#[derive(Serialize, Clone, Debug)]
+struct ImageConfig {
+    installed: bool,
+    provisioned: bool,
+    disk_size_gb: u32,
+    fs_format: String,
+    runtime_root: String,
+}
+
+/// Resolve the writable runtime root where the bundled install provisions
+/// QEMU + image + disk.raw (%LOCALAPPDATA%\QArmDroid). For a dev repo this is
+/// just the repo root.
+fn runtime_root() -> PathBuf {
+    std::env::var("LOCALAPPDATA")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from("."))
+        .join("QArmDroid")
+}
+
+/// The immutable installer resources directory that ships the QEMU binary,
+/// Android image inputs and build tools (e.g. C:\Program Files\QArmDroid\
+/// resources). These are read-only at runtime, so provision_bundle.ps1 copies
+/// them into `runtime_root()`. Returns None when not running from a bundled
+/// install (dev repo), in which case the script falls back to a sibling dir.
+fn install_resources() -> Option<PathBuf> {
+    std::env::current_exe().ok().and_then(|e| {
+        e.parent().map(|d| d.join("resources")).and_then(|r| {
+            if r.join("qemu").join("qemu-system-aarch64.exe").exists() {
+                Some(r)
+            } else {
+                None
+            }
+        })
+    })
+}
+
+/// Read the persisted image_config.json (written by provision_bundle.ps1).
+fn read_image_config() -> ImageConfig {
+    let rt = runtime_root();
+    let disk = rt.join("image").join("disk.raw");
+    // "installed" = the app's immutable resources ship next to the exe (a real
+    // bundled install). This is independent of whether provisioning has run.
+    let installed = install_resources().is_some() || rt.exists();
+    // "provisioned" = ground truth: the built disk.raw exists. We do NOT trust
+    // the config flag, which can be left stale after a failed build.
+    let provisioned = disk.exists();
+
+    let mut disk_size_gb = 8u32;
+    let mut fs_format = "ext4".to_string();
+
+    let cfg_path = rt.join("image_config.json");
+    if let Ok(contents) = fs::read_to_string(&cfg_path) {
+        // Minimal JSON parse without an external crate dependency churn.
+        if let Some(v) = extract_json_string(&contents, "userdata_fs") {
+            fs_format = v;
+        }
+        if let Some(v) = extract_json_u32(&contents, "userdata_size_gb") {
+            disk_size_gb = v;
+        }
+    }
+
+    ImageConfig {
+        installed,
+        provisioned,
+        disk_size_gb,
+        fs_format,
+        runtime_root: rt.to_string_lossy().to_string(),
+    }
+}
+
+fn extract_json_string(json: &str, key: &str) -> Option<String> {
+    let pat = format!("\"{}\"", key);
+    let idx = json.find(&pat)?;
+    let rest = &json[idx + pat.len()..];
+    let colon = rest.find(':')?;
+    let val = rest[colon + 1..].trim_start();
+    let start = val.find('"')?;
+    let end = val[start + 1..].find('"')?;
+    Some(val[start + 1..start + 1 + end].to_string())
+}
+
+fn extract_json_u32(json: &str, key: &str) -> Option<u32> {
+    let pat = format!("\"{}\"", key);
+    let idx = json.find(&pat)?;
+    let rest = &json[idx + pat.len()..];
+    let colon = rest.find(':')?;
+    let val = rest[colon + 1..].trim_start();
+    val.split(',').next()?.trim().parse::<u32>().ok()
+}
+
+fn extract_json_bool(json: &str, key: &str) -> Option<bool> {
+    let pat = format!("\"{}\"", key);
+    let idx = json.find(&pat)?;
+    let rest = &json[idx + pat.len()..];
+    let colon = rest.find(':')?;
+    let val = rest[colon + 1..].trim_start();
+    let v = val.split(',').next()?.trim().trim_end_matches('}').trim();
+    match v {
+        "true" => Some(true),
+        "false" => Some(false),
+        _ => None,
+    }
 }
 
 // Asynchronous non-blocking background touch worker.
@@ -269,20 +411,85 @@ fn start_emulator(display_mode: Option<String>) -> Result<String, String> {
     let repo_root = find_repo_root()?;
 
     // Bundled install: resources\qemu\qemu-system-aarch64.exe exists next to
-    // the exe. `inst_resources` = the immutable installer resources dir (where
-    // provision_bundle.ps1 and the QEMU/image inputs were staged). After
-    // provisioning, find_repo_root() prefers %LOCALAPPDATA%\QArmDroid, so keep
-    // the install resources dir separately for -InstallRoot.
+    // the exe. The runtime (QEMU/image/disk.raw) is provisioned by the user
+    // explicitly via the Setup panel, NOT automatically on first launch.
     let inst_resources = std::env::current_exe()
         .ok()
         .and_then(|e| e.parent().map(|d| d.join("resources")))
         .filter(|r| r.join("qemu").join("qemu-system-aarch64.exe").exists());
     let bundled = inst_resources.is_some();
 
-    let launch_script = repo_root.join("tools").join("launch.ps1");
-    // Default to embedded (VNC websocket into the Tauri window). The custom
-    // QArmDroid QEMU is built with VNC enabled; the display streams over
-    // ws://127.0.0.1:5901 into the noVNC canvas.
+    let runtime_root = if bundled {
+        std::env::var("LOCALAPPDATA")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| repo_root.clone())
+            .join("QArmDroid")
+    } else {
+        repo_root.clone()
+    };
+
+    // Require an already-provisioned image. The UI gates launch behind the
+    // Setup panel, but guard here too so a stray launch can't silently
+    // start a missing-disk run.
+    let disk = runtime_root.join("image").join("disk.raw");
+    if bundled && !disk.exists() {
+        return Err(
+            "Android image is not installed yet. Open 'Configure Image' and click Install.".to_string(),
+        );
+    }
+
+    // Resolve which launch.ps1 to run. The runtime root (LOCALAPPDATA\QArmDroid)
+    // is ALWAYS the `-BundleRoot` because that is where provisioning puts qemu,
+    // kernel, initrd and disk.raw. The Program Files `resources` dir holds the
+    // immutable inputs only and has no disk.raw, so it is never a valid bundle
+    // root. On a fresh provision the runtime tools copy of launch.ps1 exists;
+    // if it is somehow missing, self-heal by copying it from the install or
+    // dev-repo tools dir (and provision_bundle.ps1 too, so future installs work).
+    let launch_script = runtime_root.join("tools").join("launch.ps1");
+    if !launch_script.exists() {
+        let script_src: Option<PathBuf> = std::env::current_exe()
+            .ok()
+            .and_then(|e| e.parent().map(|d| d.join("resources")))
+            .map(|r| r.join("tools").join("launch.ps1"))
+            .filter(|p| p.exists());
+        let script_src = if script_src.is_some() {
+            script_src
+        } else {
+            let r = repo_root.join("tools").join("launch.ps1");
+            if r.exists() {
+                Some(r)
+            } else {
+                None
+            }
+        };
+        if let Some(src) = script_src {
+            let tools_dir = runtime_root.join("tools");
+            let _ = fs::create_dir_all(&tools_dir);
+            let _ = fs::copy(&src, &launch_script);
+            // Also ensure provision_bundle.ps1 is present for future installs.
+            let prov_src = src.parent().unwrap().join("provision_bundle.ps1");
+            if prov_src.exists() {
+                let _ = fs::copy(&prov_src, tools_dir.join("provision_bundle.ps1"));
+            }
+        }
+        if !launch_script.exists() {
+            return Err(format!(
+                "launch.ps1 not found at {:?} (re-run 'Configure Image' > Install)",
+                launch_script
+            ));
+        }
+    }
+
+    start_emulator_with(&runtime_root, &runtime_root, display_mode)
+}
+
+/// Shared launcher used by both bundled and dev paths.
+fn start_emulator_with(
+    runtime_root: &Path,
+    bundle_root: &Path,
+    display_mode: Option<String>,
+) -> Result<String, String> {
+    let launch_script = runtime_root.join("tools").join("launch.ps1");
     let mode = display_mode.unwrap_or_else(|| "embedded".to_string());
     let qemu_mode = match mode.as_str() {
         "scrcpy" => "none",
@@ -295,25 +502,6 @@ fn start_emulator(display_mode: Option<String>) -> Result<String, String> {
         .to_str()
         .ok_or_else(|| "Failed to convert script path to string".to_string())?;
 
-    // Provision on first run of a bundled install (copies QEMU/image, builds
-    // disk.raw into %LOCALAPPDATA%\QArmDroid). In a dev repo this is a no-op
-    // because the provision script detects missing bundle resources.
-    let provision = repo_root.join("tools").join("provision_bundle.ps1");
-    if bundled {
-        if let Some(inst) = &inst_resources {
-            if provision.exists() {
-                let _ = run_with_timeout(
-                    silent_command("powershell.exe")
-                        .current_dir(&repo_root)
-                        .args(&["-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
-                                provision.to_str().unwrap(),
-                                "-InstallRoot", inst.to_str().unwrap()]),
-                    Duration::from_secs(1800), // disk.raw build can take ~15 min
-                );
-            }
-        }
-    }
-
     let mut args = vec![
         "-NoProfile".to_string(),
         "-ExecutionPolicy".to_string(),
@@ -323,13 +511,20 @@ fn start_emulator(display_mode: Option<String>) -> Result<String, String> {
         "-DisplayMode".to_string(),
         qemu_mode.to_string(),
     ];
-    if bundled {
-        args.push("-BundleRoot".to_string());
-        args.push(repo_root.to_str().unwrap_or("").to_string());
+    args.push("-BundleRoot".to_string());
+    args.push(bundle_root.to_str().unwrap_or("").to_string());
+
+    // SDL shows the virtio-gpu framebuffer directly (no VNC/scrcpy encoder
+    // in between). With the default minigbm gralloc the scanout is BGR ->
+    // red/blue look swapped in the native window. Switching to the CPU
+    // gralloc ('default') produces an RGB scanout, fixing the swap.
+    if qemu_mode == "sdl" {
+        args.push("-GrallockOverride".to_string());
+        args.push("default".to_string());
     }
 
     match silent_command("powershell.exe")
-        .current_dir(&repo_root)
+        .current_dir(runtime_root)
         .args(&args)
         .spawn()
     {
@@ -589,10 +784,218 @@ fn optimize_performance() -> Result<String, String> {
     Ok("UI animations optimized".to_string())
 }
 
+// --------------------------------------------------------------- image setup --
+// Guard so the UI can't kick off two concurrent provisions.
+static PROVISIONING: Mutex<bool> = Mutex::new(false);
+
+#[tauri::command]
+fn get_image_config() -> ImageConfig {
+    read_image_config()
+}
+
+#[tauri::command]
+fn save_image_config(disk_size_gb: u32, fs_format: String) -> Result<ImageConfig, String> {
+    let rt = runtime_root();
+    let cfg_path = rt.join("image_config.json");
+    let mut cfg_provisioned = false;
+    if let Ok(contents) = fs::read_to_string(&cfg_path) {
+        if let Some(v) = extract_json_bool(&contents, "provisioned") {
+            cfg_provisioned = v;
+        }
+    }
+    // Only update the user-editable preferences; keep provisioned flag.
+    let json = format!(
+        "{{\"userdata_size_gb\":{},\"userdata_fs\":\"{}\",\"provisioned\":{}}}",
+        disk_size_gb, fs_format, cfg_provisioned
+    );
+    if let Some(parent) = cfg_path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    fs::write(&cfg_path, json).map_err(|e| format!("Failed to save config: {}", e))?;
+    Ok(read_image_config())
+}
+
+/// Run the provisioning script to completion on a BACKGROUND thread so the
+/// UI stays responsive (the disk build can take 10-20 minutes). Progress is
+/// streamed to the frontend via `provision-progress` events. Returns
+/// immediately with a startup message; the UI tracks lifecycle via events.
+#[tauri::command]
+async fn provision_image(app: tauri::AppHandle, force: Option<bool>, disk_size_gb: Option<u32>, fs_format: Option<String>) -> Result<String, String> {
+    // Refuse concurrent runs.
+    {
+        let mut lock = PROVISIONING.lock().unwrap();
+        if *lock {
+            return Err("Image provisioning is already in progress.".to_string());
+        }
+        *lock = true;
+    }
+
+    let rt = runtime_root();
+    let runtime_provision = rt.join("tools").join("provision_bundle.ps1");
+    // Prefer the runtime tools copy; fall back to the immutable install
+    // resources tools dir (used on a fresh runtime before the first
+    // provisioning has copied scripts into %LOCALAPPDATA%\QArmDroid\tools),
+    // then to the dev repo root.
+    let provision_script = if runtime_provision.exists() {
+        runtime_provision
+    } else if let Some(inst) = install_resources() {
+        let from_inst = inst.join("tools").join("provision_bundle.ps1");
+        if from_inst.exists() {
+            from_inst
+        } else {
+            match find_repo_root() {
+                Ok(r) => r.join("tools").join("provision_bundle.ps1"),
+                Err(_) => runtime_provision,
+            }
+        }
+    } else {
+        match find_repo_root() {
+            Ok(r) => r.join("tools").join("provision_bundle.ps1"),
+            Err(_) => runtime_provision,
+        }
+    };
+
+    if !provision_script.exists() {
+        *PROVISIONING.lock().unwrap() = false;
+        return Err(format!("provision_bundle.ps1 not found at {:?}", provision_script));
+    }
+
+    let force = force.unwrap_or(false);
+    let gb = disk_size_gb.unwrap_or(8).clamp(4, 256);
+    let fs = fs_format.unwrap_or_else(|| "ext4".to_string());
+    let fs = if fs == "f2fs" { "f2fs" } else { "ext4" };
+
+    let mut args = vec![
+        "-NoProfile".to_string(),
+        "-ExecutionPolicy".to_string(),
+        "Bypass".to_string(),
+        "-File".to_string(),
+        provision_script.to_string_lossy().to_string(),
+        "-RuntimeRoot".to_string(),
+        rt.to_string_lossy().to_string(),
+        "-DiskSizeGB".to_string(),
+        gb.to_string(),
+        "-FsFormat".to_string(),
+        fs.to_string(),
+    ];
+    // Point the script at the immutable installer inputs (Program Files
+    // resources). Without this it would try to copy QEMU/image from the
+    // writable runtime dir, which fails ("runtime missing").
+    if let Some(inst) = install_resources() {
+        args.push("-InstallRoot".to_string());
+        args.push(inst.to_string_lossy().to_string());
+    }
+    if force {
+        args.push("-Force".to_string());
+    }
+
+    let app2 = app.clone();
+    let _ = app.emit(
+        "provision-progress",
+        ProvisionProgress {
+            percent: 0,
+            stage: "Starting".into(),
+            message: "Preparing to install the Android image...".into(),
+            done: false,
+            error: false,
+        },
+    );
+
+    // Spawn the blocking work on a dedicated thread; the async command returns
+    // immediately so the webview event loop never stalls.
+    std::thread::spawn(move || {
+        let emit = |p: &ProvisionProgress| {
+            let _ = app2.emit("provision-progress", p.clone());
+        };
+
+        let mut child = match silent_command("powershell.exe")
+            .args(&args)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+        {
+            Ok(c) => c,
+            Err(e) => {
+                emit(&ProvisionProgress {
+                    percent: 0,
+                    stage: "Error".into(),
+                    message: format!("Failed to start provisioning: {}", e),
+                    done: false,
+                    error: true,
+                });
+                *PROVISIONING.lock().unwrap() = false;
+                return;
+            }
+        };
+
+        // Stream stdout, parse `PROGRESS <pct> <stage>` lines, forward them.
+        if let Some(out) = child.stdout.take() {
+            let reader = std::io::BufReader::new(out);
+            for line in reader.lines() {
+                if let Ok(l) = line {
+                    let trimmed = l.trim();
+                    if let Some(rest) = trimmed.strip_prefix("PROGRESS ") {
+                        let mut parts = rest.splitn(2, ' ');
+                        if let (Some(pct_s), Some(stage)) = (parts.next(), parts.next()) {
+                            if let Ok(pct) = pct_s.parse::<u32>() {
+                                let is_err = stage.to_lowercase().contains("error");
+                                emit(&ProvisionProgress {
+                                    percent: pct.min(100),
+                                    stage: stage.to_string(),
+                                    message: l,
+                                    done: pct >= 100 && !is_err,
+                                    error: is_err,
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Wait for completion and emit the terminal state.
+        match child.wait() {
+            Ok(s) if s.success() => {
+                emit(&ProvisionProgress {
+                    percent: 100,
+                    stage: "Complete".into(),
+                    message: "Android image installed. You can now launch the emulator.".into(),
+                    done: true,
+                    error: false,
+                });
+            }
+            Ok(s) => {
+                emit(&ProvisionProgress {
+                    percent: 0,
+                    stage: "Error".into(),
+                    message: format!("Provisioning exited with status {}", s),
+                    done: false,
+                    error: true,
+                });
+            }
+            Err(e) => {
+                emit(&ProvisionProgress {
+                    percent: 0,
+                    stage: "Error".into(),
+                    message: format!("Failed to wait on provisioning: {}", e),
+                    done: false,
+                    error: true,
+                });
+            }
+        }
+        *PROVISIONING.lock().unwrap() = false;
+    });
+
+    Ok("Image provisioning started in the background.".to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .setup(|_app| {
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             start_emulator,
             stop_emulator,
@@ -607,7 +1010,10 @@ pub fn run() {
             send_motion_move,
             send_motion_up,
             deploy_touch_daemon,
-            optimize_performance
+            optimize_performance,
+            get_image_config,
+            save_image_config,
+            provision_image
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

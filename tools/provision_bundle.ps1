@@ -13,7 +13,7 @@
                                                    boot/init_boot/vendor_boot/
                                                    vbmeta*.img, super.img
       3. Builds disk.raw in %LOCALAPPDATA%\QArmDroid\image from the bundled
-         super.img + boot images (via m0_build.py's pure-Python disk stage —
+         super.img + boot images (via m0_build.py's pure-Python disk stage -
          ~10-20 min, sparse output, mostly zeros fast).
 
     After provisioning, launch.ps1 is invoked with
@@ -42,18 +42,72 @@ param(
     [string]$InstallRoot,
     [string]$RuntimeRoot,
     [switch]$Force,
-    [switch]$SkipDisk
+    [switch]$SkipDisk,
+    [int]$DiskSizeGB = 8,
+    [string]$FsFormat = "ext4"
 )
 
-$ErrorActionPreference = "Continue"
-if (-not $InstallRoot) { $InstallRoot = (Resolve-Path "$PSScriptRoot\..").Path }
+# Validate + normalize the user-selected image configuration so the disk
+# builder (m0_build.py) and the UI stay in agreement.
+if ($DiskSizeGB -lt 4) { $DiskSizeGB = 4 }
+if ($DiskSizeGB -gt 256) { $DiskSizeGB = 256 }
+$FsFormat = $FsFormat.Trim().ToLower()
+if ($FsFormat -ne "f2fs") { $FsFormat = "ext4" }
+
+# Structured progress line consumed by the Rust host (QArmDroid) and rendered
+# as a real progress bar in the UI. Format: PROGRESS <percent> <stage>
+function Emit-Progress {
+    param([int]$Percent, [string]$Stage)
+    Write-Host ("PROGRESS {0} {1}" -f $Percent, $Stage)
+}
+
+if (-not $InstallRoot) { 
+    # Try to find the install root from the script location
+    $scriptDir = Split-Path $PSScriptRoot -Parent
+    if ((Split-Path $scriptDir -Leaf) -eq "tools") {
+        $InstallRoot = Split-Path $scriptDir -Parent
+    } else {
+        $InstallRoot = (Resolve-Path "$PSScriptRoot\..\..").Path
+    }
+}
 if (-not $RuntimeRoot) {
     $RuntimeRoot = Join-Path $env:LOCALAPPDATA "QArmDroid"
+}
+
+# Source dirs: the immutable installer inputs (QEMU, image, tools) live under
+# the install resources dir. In a bundled install this is the Program Files
+# "resources" directory shipped by the installer; InstallRoot is passed in by
+# the Rust host. If InstallRoot was not supplied, fall back to the same
+# directory that holds this script's parent "tools" (i.e. assume the inputs
+# sit alongside the runtime tools - covers dev-repo layouts).
+if (-not $InstallRoot) {
+    $scriptDir = Split-Path $PSScriptRoot -Parent
+    if ((Split-Path $scriptDir -Leaf) -eq "tools") {
+        $InstallRoot = Split-Path $scriptDir -Parent
+    } else {
+        $InstallRoot = (Resolve-Path "$PSScriptRoot\..\..").Path
+    }
 }
 
 $qemuSrc  = Join-Path $InstallRoot "qemu"
 $imgSrc   = Join-Path $InstallRoot "image"
 $toolsSrc = Join-Path $InstallRoot "tools"
+
+# ---------------------------------------------------------------- python ------ #
+    Emit-Progress 5 "Syncing Python runtime"
+    Write-Host "== syncing Python ==" -ForegroundColor Cyan
+    $pythonSrc = Join-Path $InstallRoot "python"
+    $pythonDst = Join-Path $RuntimeRoot "python"
+    if (-not (Test-Path $pythonDst)) {
+        if (-not (Test-Path $pythonSrc)) {
+            Emit-Progress 0 ("ERROR: Python runtime not found in installer resources ($pythonSrc). Reinstall the app.")
+            Write-Error "Python runtime missing at $pythonSrc - cannot build disk.raw"
+        }
+        Copy-Item $pythonSrc -Recurse -Destination $pythonDst -Force
+    }
+
+    Emit-Progress 12 "Copying QEMU binary"
+    Write-Host "== syncing QEMU runtime ==" -ForegroundColor Cyan
 $qemuDst  = Join-Path $RuntimeRoot "qemu"
 $imgDst   = Join-Path $RuntimeRoot "image"
 $toolsDst = Join-Path $RuntimeRoot "tools"
@@ -67,52 +121,117 @@ $imageInputs = @("kernel","initrd.img","boot.img","init_boot.img","vendor_boot.i
 $needSync = $Force -or -not (Test-Path (Join-Path $qemuDst "qemu-system-aarch64.exe"))
 
 if ($needSync) {
+    Emit-Progress 18 "Copying QEMU binary"
     Write-Host "== syncing QEMU runtime ==" -ForegroundColor Cyan
     Copy-Item (Join-Path $qemuSrc "qemu-system-aarch64.exe") $qemuDst -Force
     Get-ChildItem $qemuSrc -Filter "*.dll" -ErrorAction SilentlyContinue |
         Copy-Item -Destination $qemuDst -Force
+    # QEMU data dir (share\qemu, incl. keymaps + ROMs) - ship into the runtime
+    # so end-user machines without msys2 can launch (-L points here).
+    if (Test-Path (Join-Path $qemuSrc "share\qemu")) {
+        $fwDst = Join-Path $qemuDst "share\qemu"
+        New-Item -ItemType Directory -Force -Path $fwDst | Out-Null
+        Copy-Item (Join-Path $qemuSrc "share\qemu\*") $fwDst -Recurse -Force
+    }
 
+    Emit-Progress 35 "Copying Android image inputs"
     Write-Host "== syncing image inputs ==" -ForegroundColor Cyan
     foreach ($n in $imageInputs) {
         $s = Join-Path $imgSrc $n
         if (Test-Path $s) { Copy-Item $s (Join-Path $imgDst $n) -Force }
     }
 
+    Emit-Progress 50 "Copying build tools"
     Write-Host "== syncing tools ==" -ForegroundColor Cyan
-    foreach ($n in @("imgtools.py","m0_build.py")) {
-        $s = Join-Path $toolsSrc $n
-        if (Test-Path $s) { Copy-Item $s (Join-Path $toolsDst $n) -Force }
+    # Copy the full tools dir (imgtools.py, m0_build.py, launch.ps1 and THIS
+    # script) so the runtime is self-contained and the Rust host can re-invoke
+    # provision_bundle.ps1 / launch.ps1 from %LOCALAPPDATA%\QArmDroid\tools.
+    if (Test-Path $toolsSrc) {
+        Copy-Item (Join-Path $toolsSrc "*") $toolsDst -Recurse -Force
     }
+
+    # --------------------------------------------------------------- python ------ #
+    Emit-Progress 55 "Ensuring Python runtime"
+    Write-Host "== syncing Python ==" -ForegroundColor Cyan
+    $pythonSrc = Join-Path $InstallRoot "python"
+    $pythonDst = Join-Path $RuntimeRoot "python"
+    if (-not (Test-Path $pythonDst)) {
+        if (-not (Test-Path $pythonSrc)) {
+            Emit-Progress 0 ("ERROR: Python runtime not found in installer resources ($pythonSrc). Reinstall the app.")
+            Write-Error "Python runtime missing at $pythonSrc - cannot build disk.raw"
+        }
+        Write-Host "  copying Python embeddable..." -ForegroundColor Cyan
+        Copy-Item $pythonSrc -Recurse -Destination $pythonDst -Force
+    }
+
+    # --------------------------------------------------------------- disk.raw --- #
 } else {
     Write-Host "runtime already provisioned (use -Force to re-sync)" -ForegroundColor DarkGray
 }
 
 # --------------------------------------------------------------- disk.raw --- #
 $disk = Join-Path $imgDst "disk.raw"
+$superImg = Join-Path $imgDst "super.img"
 if ($SkipDisk -or ((Test-Path $disk) -and -not $Force)) {
     Write-Host "disk.raw present: $disk" -ForegroundColor Green
+    Emit-Progress 100 "Image already provisioned"
 } else {
-    if (-not (Test-Path (Join-Path $imgDst "super.img"))) {
-        Write-Error "super.img missing in $imgDst — cannot build disk.raw"
+    # Ensure super.img is present in the runtime image dir (the sync block
+    # above copies it only when $needSync; copy it here too so a rebuild that
+    # skips the QEMU re-sync still has its input).
+    if (-not (Test-Path $superImg) -and (Test-Path (Join-Path $imgSrc "super.img"))) {
+        Copy-Item (Join-Path $imgSrc "super.img") $superImg -Force
     }
+    if (-not (Test-Path $superImg)) {
+        Emit-Progress 0 "ERROR: super.img missing"
+        Write-Error "super.img missing in $imgDst (and $imgSrc) - cannot build disk.raw"
+    }
+    Emit-Progress 60 ("Building disk.raw ($DiskSizeGB GB, $FsFormat)")
     Write-Host "== building disk.raw (this takes a while) ==" -ForegroundColor Cyan
     Push-Location $toolsDst
     try {
-        $py = "python"
-        $cmd = @("$toolsDst\m0_build.py", "disk", "QARM_BUNDLE=$RuntimeRoot")
-        & $py $cmd
-        if ($LASTEXITCODE -ne 0) {
-            Write-Error "m0_build disk stage failed (exit $LASTEXITCODE)"
+        $py = Join-Path $toolsDst "..\python\python.exe"
+        $env:QARM_DISK_GB = "$DiskSizeGB"
+        $env:QARM_FS = "$FsFormat"
+        # Stage 1: unsparse super.img -> super_raw.img (input to the disk GPT).
+        # Stage 2: assemble the GPT disk.raw from super_raw.img + boot images.
+        $stages = @("super", "disk")
+        foreach ($stg in $stages) {
+            Emit-Progress 60 ("m0_build stage: $stg")
+            Write-Host "== m0_build $stg ==" -ForegroundColor Cyan
+            $cmd = @("$toolsDst\m0_build.py", $stg, "QARM_BUNDLE=$RuntimeRoot")
+            & $py $cmd
+            if ($LASTEXITCODE -ne 0) {
+                Emit-Progress 0 ("ERROR: m0_build $stg failed (exit $LASTEXITCODE)")
+                Write-Error "m0_build $stg stage failed (exit $LASTEXITCODE)"
+            }
         }
     }
     finally { Pop-Location }
     if (Test-Path $disk) {
+        Emit-Progress 100 ("disk.raw built: $((Get-Item $disk).Length/1GB) GB")
         Write-Host "disk.raw built: $((Get-Item $disk).Length/1GB) GB" -ForegroundColor Green
     } else {
+        Emit-Progress 0 "ERROR: disk.raw not produced"
         Write-Error "disk.raw not produced"
     }
 }
 
+# Persist the selected image configuration so the UI can reflect it.
+# Only mark the image provisioned when disk.raw was actually produced.
+$cfgPath = Join-Path $RuntimeRoot "image_config.json"
+$cfg = @{}
+if (Test-Path $cfgPath) {
+    try { $cfg = Get-Content $cfgPath -Raw | ConvertFrom-Json -AsHashtable } catch { $cfg = @{} }
+}
+$cfg["userdata_size_gb"] = $DiskSizeGB
+$cfg["userdata_fs"] = $FsFormat
+$cfg["provisioned"] = (Test-Path $disk)
+$cfg | ConvertTo-Json -Compress | Set-Content -Path $cfgPath -Force
+
 Write-Host "== done ==" -ForegroundColor Green
 Write-Host "runtime: $RuntimeRoot" -ForegroundColor DarkGray
-Write-Host ("launch:  powershell -File {0}\tools\launch.ps1 -BundleRoot {0} -DisplayMode embedded -GpuMode basic" -f $RuntimeRoot) -ForegroundColor DarkGray
+Write-Host ("launch: powershell -File {0}\tools\launch.ps1 -BundleRoot {0} -DisplayMode embedded -GpuMode basic" -f $RuntimeRoot) -ForegroundColor DarkGray
+
+
+

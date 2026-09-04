@@ -26,11 +26,23 @@ LZ4 = os.path.join(MSYS_BIN, "lz4.exe")      # optional fallback only
 # Overridable for bundled (installed) deployment: the installer stages the
 # image inputs + pure-Python tools at bundle paths and runs
 # `python m0_build.py disk QARM_BUNDLE=<dir>` to build disk.raw there.
+QARM_DISK_GB = int(os.environ.get("QARM_DISK_GB", "0")) or 8   # userdata size (GB)
+QARM_FS = os.environ.get("QARM_FS", "ext4").strip().lower()    # ext4 | f2fs
+if QARM_FS not in ("ext4", "f2fs"):
+    QARM_FS = "ext4"
+
 if len(sys.argv) >= 3 and sys.argv[2].startswith("QARM_BUNDLE="):
     BUNDLE = sys.argv[2].split("=", 1)[1]
     IMG = os.path.join(BUNDLE, "image")       # super.img, boot.img, ... here
     WORK = os.path.join(BUNDLE, "image")      # disk.raw lands next to inputs
     sys.path.insert(0, os.path.join(BUNDLE, "tools"))  # imgtools.py from bundle
+    # Bundle-scoped overrides (set by provision_bundle.ps1).
+    _gb = int(os.environ.get("QARM_DISK_GB", "0"))
+    if _gb:
+        QARM_DISK_GB = _gb
+    _fs = os.environ.get("QARM_FS", "").strip().lower()
+    if _fs in ("ext4", "f2fs"):
+        QARM_FS = _fs
 SIMG2IMG = os.path.join(MSYS_BIN, "simg2img.exe")  # optional fallback only
 
 DISK_NAME = "disk.raw"
@@ -298,6 +310,11 @@ def main():
             # avb/avb_keys live in fs_mgr_flags = 5th column (index 4)
             fields = line.split()
             if len(fields) >= 5:
+                # Honor a user-selected userdata filesystem (ext4|f2fs).
+                # The /data line's fstype is column 3; only swap when the
+                # partition is userdata and a non-default format was chosen.
+                if QARM_FS == "f2fs" and fields[1] == "/data" and fields[0].endswith("userdata"):
+                    fields[2] = "f2fs"
                 flags = [f for f in fields[4].split(",")
                          if not (f == "avb" or f.startswith("avb=") or f.startswith("avb_keys="))]
                 fields[4] = ",".join(flags)
@@ -472,7 +489,7 @@ def main():
         add("vbmeta_vendor_dlkm_a", 64 * 1024)
         add("vbmeta_vendor_dlkm_b", 64 * 1024)
         add("super", super_size)
-        add("userdata", 8 * GB)
+        add("userdata", QARM_DISK_GB * GB)
         add("metadata", 16 * MB)
         add("misc", 1 * MB)
         add("frp", 1 * MB)
@@ -505,6 +522,32 @@ def main():
             if name in contents and os.path.exists(contents[name]):
                 write_at(disk, start, contents[name])
         print("[4/5] disk content written (userdata/metadata/misc left zero -> formatted by guest)")
+        # Record the chosen userdata filesystem + size so the UI and the
+        # guest's fs_mgr agree. The partition is left zeroed; Android formats
+        # it on first boot via the fstab `formattable` entry. For f2fs we note
+        # the intent in image_config.json; the bundled fstab uses ext4 by
+        # default, so f2fs is honored by re-pointing the /data fstab line at
+        # build time when requested (best-effort, dev default stays ext4).
+        with open(os.path.join(WORK, "userdata.fstype"), "w") as f:
+            f.write(QARM_FS)
+        try:
+            import json
+            cfg_path = os.path.join(os.path.dirname(WORK), "image_config.json")
+            cfg = {}
+            if os.path.exists(cfg_path):
+                try:
+                    cfg = json.load(open(cfg_path))
+                except Exception:
+                    cfg = {}
+            cfg["userdata_fs"] = QARM_FS
+            cfg["userdata_size_gb"] = QARM_DISK_GB
+            json.dump(cfg, open(cfg_path, "w"), indent=2)
+        except Exception:
+            pass
+        if QARM_FS == "f2fs":
+            print(f"[4/5] userdata will be formatted as f2fs ({QARM_DISK_GB} GB) on first boot")
+        else:
+            print(f"[4/5] userdata will be formatted as ext4 ({QARM_DISK_GB} GB) on first boot")
 
     if stage in ("all", "summary"):
         print("[5/5] artifacts:")
