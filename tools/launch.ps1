@@ -233,7 +233,16 @@ function Build-QemuArgs {
     }
 
     $inputDev = @()
-    if ($windowed) { $inputDev = @("-device","nec-usb-xhci","-device","usb-kbd","-device","usb-tablet") }
+    if ($windowed) {
+        # USB HID (nec-usb-xhci + usb-kbd + usb-tablet): the tablet is an
+        # ABSOLUTE device. Window->guest conversion in QEMU (ui/sdl2.c) now
+        # mirrors SDL's RenderSetLogicalSize letterbox exactly, so a click/
+        # drag lands precisely where the cursor is regardless of window size.
+        # (A relative usb-mouse floats a cursor by accumulated deltas - taps
+        # land wherever the cursor drifted, i.e. "wrong coordinates" after
+        # any resize. Only the absolute tablet gives true position.)
+        $inputDev = @("-device","nec-usb-xhci","-device","usb-kbd","-device","usb-tablet")
+    }
 
     # Audio: virtio-sound (guest kernel has virtio_snd driver)
     $audioDev = @("-device", "virtio-sound-pci")
@@ -248,9 +257,19 @@ function Build-QemuArgs {
     # Assemble: machine/base -> storage -> net -> gpu -> consoles -> input ->
     # display -> serial/monitor -> cmdline. Order groups mirror historical
     # working invocations (see docs/history/BUILD_LOG.md).
+    # Firmware/ROM data dir. The bundled (custom) QEMU defaults to its
+    # compile-time datadir (C:\msys64\clangarm64\share\qemu), which end-user
+    # machines lack -> "failed to find romfile efi-virtio.rom" at launch.
+    # Point -L at the firmware shipped next to the qemu binary, or fall back
+    # to the msys2 share when running from the dev repo.
+    $fwDir = Join-Path (Split-Path $QemuPath -Parent) "share\qemu"
+    if (-not (Test-Path (Join-Path $fwDir "efi-virtio.rom"))) {
+        $fwDir = "C:\msys64\clangarm64\share\qemu"
+    }
     $arr = @(
         "-accel", "whpx",
         "-cpu", "host",
+        "-L", $fwDir,
         "-machine", "virt,gic-version=3,highmem=on",
         "-m", $Memory,
         "-smp", "$Cores,sockets=1,cores=$Cores,threads=1",

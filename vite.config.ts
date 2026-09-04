@@ -16,7 +16,7 @@ export default defineConfig(async () => ({
   server: {
     port: 1420,
     strictPort: true,
-    host: host || false,
+    host: host || "127.0.0.1",
     hmr: host
       ? {
           protocol: "ws",
@@ -25,8 +25,21 @@ export default defineConfig(async () => ({
         }
       : undefined,
     watch: {
-      // 3. tell Vite to ignore watching `src-tauri`
-      ignored: ["**/src-tauri/**"],
+      // Ignore backend, toolchain, and heavy repository directories from Vite file watcher
+      ignored: [
+        "**/src-tauri/**",
+        "**/tools/**",
+        "**/angle-repo/**",
+        "**/chromium-src/**",
+        "**/aosp_cf_arm64_only_phone-img/**",
+        "**/wsa-extracted/**",
+        "**/research/**",
+        "**/docs/**",
+        "**/images/**",
+        "**/work_sdk/**",
+        "**/.git/**",
+        "**/dist/**",
+      ],
     },
   },
 }));
