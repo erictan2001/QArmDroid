@@ -27,7 +27,7 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": ["msi"],
     "resources": [
       "resources/qemu/**/*",
       "resources/image/**/*",
