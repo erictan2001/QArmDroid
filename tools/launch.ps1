@@ -46,6 +46,9 @@ param(
     [int]$MonitorPort = 0,
     [string]$GrallockOverride = '',
     [switch]$SdlGl,
+    [int]$Density = 0,
+    [switch]$TabletMode,
+    [string]$NavMode = "gestural",
     # Bundled (installed) deployment root. When set, the QEMU binary, its
     # runtime DLLs, the kernel/initrd/disk, and adb are resolved under
     # <BundleRoot>\qemu\... / <BundleRoot>\image\... / <BundleRoot>\tools\
@@ -53,6 +56,13 @@ param(
     # resource dir here.
     [string]$BundleRoot = ""
 )
+
+if ($TabletMode -and ($Density -eq 0)) {
+    $Density = 213
+}
+if ($Density -eq 0) {
+    $Density = 240
+}
 
 # ------------------------------------------------------------------ PATH ----
 # The custom QEMU links against MSYS2 runtime DLLs (glib-2.0-0.dll, pixman,
@@ -188,11 +198,11 @@ function Build-QemuArgs {
     # Kernel cmdline (canonical - matches init_wrapper expectations:
     # 4 UARTs, quiet console, binder rust impl, firmware from vendor/etc)
     # video=virtio-fb:1280x800@60 tells guest kernel framebuffer matches virtio-gpu device
-    # androidboot.lcd_density=240 sets display density before SurfaceFlinger starts (hdpi for 1280x800)
+    # androidboot.lcd_density=$Density sets display density before SurfaceFlinger starts (213 for tablet, 240 for phone)
     $append = "console=ttyAMA0 earlycon=pl011,0x9000000 quiet loglevel=0 " +
               "printk.devkmsg=on audit=0 panic=-1 8250.nr_uarts=4 " +
               "video=virtio-fb:1280x800@60 " +
-              "androidboot.lcd_density=240 " +
+              "androidboot.lcd_density=$Density " +
               "androidboot.hardware.gltransport=virtio-gpu-pipe binder.impl=rust cma=0 firmware_class.path=/vendor/etc/ " +
               "loop.max_part=7 init=/init bootconfig"
     # Optional gralloc override (e.g. 'default' fixes R/B-swap on plain
@@ -320,15 +330,20 @@ if (-not (Test-Path $M0Dir)) { New-Item -ItemType Directory -Path $M0Dir -Force 
 
 # ------------------------------------------------------------- watchdog ---- #
 Start-Job -ScriptBlock {
-    param($AdbExe)
+    param($AdbExe, $TargetDensity, $TargetNavMode)
     do {
         Start-Sleep -Seconds 2
         & $AdbExe connect 127.0.0.1:5555 2>$null | Out-Null
         $s = & $AdbExe -s 127.0.0.1:5555 shell getprop sys.boot_completed 2>$null
     } until ($s -match "1")
-    # Set both size AND density to match 1280x800 display (hdpi ~240 for tablet)
-    & $AdbExe -s 127.0.0.1:5555 shell "setprop ctl.stop seriallogging; setprop ctl.stop console; dmesg -n 1; wm size 1280x800; wm density 240; settings put global window_animation_scale 0.5; settings put global transition_animation_scale 0.5; settings put global animator_duration_scale 0.5" 2>$null
-} -ArgumentList $Adb | Out-Null
+    # Set size and target density (213 for tablet mode sw>=600dp, 240 for standard phone layout)
+    & $AdbExe -s 127.0.0.1:5555 shell "setprop ctl.stop seriallogging; setprop ctl.stop console; dmesg -n 1; wm size 1280x800; wm density $TargetDensity; settings put global window_animation_scale 0.5; settings put global transition_animation_scale 0.5; settings put global animator_duration_scale 0.5" 2>$null
+    if ($TargetNavMode -eq "threebutton") {
+        & $AdbExe -s 127.0.0.1:5555 shell "cmd overlay enable com.android.internal.systemui.navbar.threebutton; cmd overlay disable com.android.internal.systemui.navbar.gestural" 2>$null
+    } else {
+        & $AdbExe -s 127.0.0.1:5555 shell "cmd overlay enable com.android.internal.systemui.navbar.gestural; cmd overlay disable com.android.internal.systemui.navbar.threebutton" 2>$null
+    }
+} -ArgumentList $Adb, $Density, $NavMode | Out-Null
 
 Write-Host "==========================================================" -ForegroundColor Cyan
 Write-Host " Starting Android 16 ARM64 Emulator (QEMU + WHPX)" -ForegroundColor Green

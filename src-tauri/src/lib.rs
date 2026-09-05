@@ -204,6 +204,8 @@ struct ImageConfig {
     memory_gb: u32,
     gpu_mode: String,
     close_on_exit: bool,
+    tablet_mode: bool,
+    gesture_nav: bool,
 }
 
 /// Resolve the writable runtime root where the bundled install provisions
@@ -246,6 +248,8 @@ fn read_image_config() -> ImageConfig {
     let mut memory_gb = 6u32;
     let mut gpu_mode = "basic".to_string();
     let mut close_on_exit = true;
+    let mut tablet_mode = false;
+    let mut gesture_nav = true;
 
     let cfg_path = rt.join("image_config.json");
     if let Ok(contents) = fs::read_to_string(&cfg_path) {
@@ -266,6 +270,12 @@ fn read_image_config() -> ImageConfig {
         }
         if let Some(v) = extract_json_bool(&contents, "close_on_exit") {
             close_on_exit = v;
+        }
+        if let Some(v) = extract_json_bool(&contents, "tablet_mode") {
+            tablet_mode = v;
+        }
+        if let Some(v) = extract_json_bool(&contents, "gesture_nav") {
+            gesture_nav = v;
         }
     }
 
@@ -353,6 +363,8 @@ fn read_image_config() -> ImageConfig {
         memory_gb,
         gpu_mode,
         close_on_exit,
+        tablet_mode,
+        gesture_nav,
     }
 }
 
@@ -567,6 +579,31 @@ fn find_repo_root() -> Result<PathBuf, String> {
     Err("Could not find repository root (repo with tools\\launch.ps1, or bundled resources\\qemu).".to_string())
 }
 
+/// Apply display density and navigation mode (gesture vs 3-button) to running Android guest via ADB.
+fn apply_android_display_and_nav(tablet_mode: bool, gesture_nav: bool) {
+    let adb = get_adb_path();
+    let density = if tablet_mode { 213 } else { 240 };
+    let density_cmd = format!("wm density {}", density);
+    let nav_cmd = if gesture_nav {
+        "cmd overlay enable com.android.internal.systemui.navbar.gestural; cmd overlay disable com.android.internal.systemui.navbar.threebutton"
+    } else {
+        "cmd overlay enable com.android.internal.systemui.navbar.threebutton; cmd overlay disable com.android.internal.systemui.navbar.gestural"
+    };
+    let combined = format!("{}; {}", density_cmd, nav_cmd);
+    let _ = silent_command(&adb)
+        .args(&["-s", "127.0.0.1:5555", "shell", &combined])
+        .output();
+}
+
+#[tauri::command]
+fn apply_system_ui_settings(tablet_mode: bool, gesture_nav: bool) -> Result<String, String> {
+    if !is_qemu_process_running() && !is_port_open(5555, 50) {
+        return Ok("Emulator is not running. Settings will take effect upon launch.".to_string());
+    }
+    apply_android_display_and_nav(tablet_mode, gesture_nav);
+    Ok("Applied navigation mode and display layout to running Android guest.".to_string())
+}
+
 #[tauri::command]
 fn start_emulator(display_mode: Option<String>) -> Result<String, String> {
     if is_qemu_process_running() || is_port_open(5901, 50) || is_port_open(5555, 50) {
@@ -611,38 +648,46 @@ fn start_emulator(display_mode: Option<String>) -> Result<String, String> {
     // if it is somehow missing, self-heal by copying it from the install or
     // dev-repo tools dir (and provision_bundle.ps1 too, so future installs work).
     let launch_script = runtime_root.join("tools").join("launch.ps1");
-    if !launch_script.exists() {
-        let script_src: Option<PathBuf> = std::env::current_exe()
-            .ok()
-            .and_then(|e| e.parent().map(|d| d.join("resources")))
-            .map(|r| r.join("tools").join("launch.ps1"))
-            .filter(|p| p.exists());
-        let script_src = if script_src.is_some() {
-            script_src
-        } else {
+    let script_src: Option<PathBuf> = std::env::current_exe()
+        .ok()
+        .and_then(|e| e.parent().map(|d| d.join("resources")))
+        .map(|r| r.join("tools").join("launch.ps1"))
+        .filter(|p| p.exists())
+        .or_else(|| {
             let r = repo_root.join("tools").join("launch.ps1");
             if r.exists() {
                 Some(r)
             } else {
                 None
             }
+        });
+    if let Some(ref src) = script_src {
+        let should_copy = if !launch_script.exists() {
+            true
+        } else {
+            let src_mtime = fs::metadata(src).and_then(|m| m.modified()).ok();
+            let dst_mtime = fs::metadata(&launch_script).and_then(|m| m.modified()).ok();
+            match (src_mtime, dst_mtime) {
+                (Some(s), Some(d)) => s > d,
+                _ => false,
+            }
         };
-        if let Some(src) = script_src {
+        if should_copy {
             let tools_dir = runtime_root.join("tools");
             let _ = fs::create_dir_all(&tools_dir);
-            let _ = fs::copy(&src, &launch_script);
+            let _ = fs::copy(src, &launch_script);
             // Also ensure provision_bundle.ps1 is present for future installs.
             let prov_src = src.parent().unwrap().join("provision_bundle.ps1");
             if prov_src.exists() {
                 let _ = fs::copy(&prov_src, tools_dir.join("provision_bundle.ps1"));
             }
         }
-        if !launch_script.exists() {
-            return Err(format!(
-                "launch.ps1 not found at {:?} (re-run 'Configure Image' > Install)",
-                launch_script
-            ));
-        }
+    }
+    if !launch_script.exists() {
+        return Err(format!(
+            "launch.ps1 not found at {:?} (re-run 'Configure Image' > Install)",
+            launch_script
+        ));
     }
 
     start_emulator_with(&runtime_root, &runtime_root, display_mode)
@@ -669,6 +714,9 @@ fn start_emulator_with(
 
     let cfg = read_image_config();
 
+    let density_val = if cfg.tablet_mode { 213 } else { 240 };
+    let nav_mode_val = if cfg.gesture_nav { "gestural" } else { "threebutton" };
+
     let mut args = vec![
         "-NoProfile".to_string(),
         "-ExecutionPolicy".to_string(),
@@ -685,6 +733,10 @@ fn start_emulator_with(
         format!("{}G", cfg.memory_gb),
         "-GpuMode".to_string(),
         cfg.gpu_mode.clone(),
+        "-Density".to_string(),
+        density_val.to_string(),
+        "-NavMode".to_string(),
+        nav_mode_val.to_string(),
     ];
 
     // SDL shows the virtio-gpu framebuffer directly (no VNC/scrcpy encoder
@@ -702,14 +754,25 @@ fn start_emulator_with(
         .spawn()
     {
         Ok(_) => {
-            // In the background, auto-connect ADB as soon as port 5555 is ready
-            std::thread::spawn(|| {
+            // In the background, auto-connect ADB and apply display/nav mode once booted
+            let tablet_mode_copy = cfg.tablet_mode;
+            let gesture_nav_copy = cfg.gesture_nav;
+            std::thread::spawn(move || {
                 for _ in 0..60 {
                     std::thread::sleep(Duration::from_secs(2));
                     if is_port_open(5555, 100) {
                         let _ = adb_cmd().args(&["connect", "127.0.0.1:5555"]).output();
                         if let Ok(out) = adb_cmd().args(&["-s", "127.0.0.1:5555", "get-state"]).output() {
                             if String::from_utf8_lossy(&out.stdout).contains("device") {
+                                for _ in 0..30 {
+                                    if let Ok(b_out) = adb_cmd().args(&["-s", "127.0.0.1:5555", "shell", "getprop", "sys.boot_completed"]).output() {
+                                        if String::from_utf8_lossy(&b_out.stdout).trim() == "1" {
+                                            apply_android_display_and_nav(tablet_mode_copy, gesture_nav_copy);
+                                            break;
+                                        }
+                                    }
+                                    std::thread::sleep(Duration::from_secs(1));
+                                }
                                 break;
                             }
                         }
@@ -1040,6 +1103,8 @@ fn save_image_config(
     memory_gb: Option<u32>,
     gpu_mode: Option<String>,
     close_on_exit: Option<bool>,
+    tablet_mode: Option<bool>,
+    gesture_nav: Option<bool>,
 ) -> Result<ImageConfig, String> {
     let rt = runtime_root();
     let cfg_path = rt.join("image_config.json");
@@ -1053,15 +1118,23 @@ fn save_image_config(
     let mem_val = memory_gb.unwrap_or(6).clamp(2, 64);
     let gpu_val = gpu_mode.unwrap_or_else(|| "basic".to_string());
     let close_val = close_on_exit.unwrap_or(true);
+    let tablet_val = tablet_mode.unwrap_or(false);
+    let gesture_val = gesture_nav.unwrap_or(true);
 
     let json = format!(
-        "{{\"userdata_size_gb\":{},\"userdata_fs\":\"{}\",\"cores\":{},\"memory_gb\":{},\"gpu_mode\":\"{}\",\"close_on_exit\":{},\"provisioned\":{}}}",
-        disk_size_gb, fs_format, cores_val, mem_val, gpu_val, close_val, cfg_provisioned
+        "{{\"userdata_size_gb\":{},\"userdata_fs\":\"{}\",\"cores\":{},\"memory_gb\":{},\"gpu_mode\":\"{}\",\"close_on_exit\":{},\"tablet_mode\":{},\"gesture_nav\":{},\"provisioned\":{}}}",
+        disk_size_gb, fs_format, cores_val, mem_val, gpu_val, close_val, tablet_val, gesture_val, cfg_provisioned
     );
     if let Some(parent) = cfg_path.parent() {
         let _ = fs::create_dir_all(parent);
     }
     fs::write(&cfg_path, json).map_err(|e| format!("Failed to save config: {}", e))?;
+
+    // If emulator is running, apply tablet mode and navigation overlay live
+    if is_qemu_process_running() || is_port_open(5555, 50) {
+        apply_android_display_and_nav(tablet_val, gesture_val);
+    }
+
     Ok(read_image_config())
 }
 
@@ -1301,6 +1374,7 @@ pub fn run() {
             optimize_performance,
             get_image_config,
             save_image_config,
+            apply_system_ui_settings,
             provision_image,
             open_runtime_folder
         ])

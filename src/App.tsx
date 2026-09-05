@@ -32,6 +32,8 @@ interface ImageConfig {
   memory_gb: number;
   gpu_mode: string;
   close_on_exit: boolean;
+  tablet_mode: boolean;
+  gesture_nav: boolean;
 }
 
 interface ProvisionProgress {
@@ -86,6 +88,8 @@ export function App() {
     memory_gb: 6,
     gpu_mode: "basic",
     close_on_exit: true,
+    tablet_mode: false,
+    gesture_nav: true,
   });
   const [showSettings, setShowSettings] = useState<boolean>(false);
   const [savePopup, setSavePopup] = useState<{ visible: boolean; message: string; isError?: boolean }>({
@@ -124,6 +128,8 @@ export function App() {
     memoryGb: number;
     gpuMode: string;
     closeOnExit: boolean;
+    tabletMode: boolean;
+    gestureNav: boolean;
   }>({
     sizeGb: 16,
     fs: "ext4",
@@ -131,6 +137,8 @@ export function App() {
     memoryGb: 6,
     gpuMode: "basic",
     closeOnExit: true,
+    tabletMode: false,
+    gestureNav: true,
   });
 
   const loadImageConfig = async () => {
@@ -144,6 +152,8 @@ export function App() {
         memoryGb: cfg.memory_gb || 6,
         gpuMode: cfg.gpu_mode || "basic",
         closeOnExit: cfg.close_on_exit ?? true,
+        tabletMode: cfg.tablet_mode ?? false,
+        gestureNav: cfg.gesture_nav ?? true,
       });
       // First run and not yet provisioned -> open settings gate automatically.
       if (!cfg.provisioned && !showSettings) {
@@ -195,7 +205,7 @@ export function App() {
 
   const handleLaunchScrcpy = async () => {
     try {
-      setLogMsg("Launching Scrcpy mirror window (60 FPS & 100% accurate color)...");
+      setLogMsg("Launching Scrcpy mirror window...");
       const msg = await invoke<string>("launch_scrcpy");
       setLogMsg(msg);
     } catch (e) {
@@ -529,12 +539,14 @@ export function App() {
         memoryGb: settingsDraft.memoryGb,
         gpuMode: settingsDraft.gpuMode,
         closeOnExit: settingsDraft.closeOnExit,
+        tabletMode: settingsDraft.tabletMode,
+        gestureNav: settingsDraft.gestureNav,
       });
       setImageConfig(cfg);
       setLogMsg("Settings saved successfully.");
       setSavePopup({
         visible: true,
-        message: `• Partition Size: ${cfg.disk_size_gb} GB (${cfg.fs_format})\n• vCPU Cores: ${cfg.cores} Cores\n• RAM Memory: ${cfg.memory_gb} GB\n• GPU Acceleration: ${cfg.gpu_mode}\n• Close on Exit: ${cfg.close_on_exit ? "Enabled (stop emulator)" : "Disabled (keep running)"}\n• Display Engine: ${displayMode}`,
+        message: `• Partition Size: ${cfg.disk_size_gb} GB (${cfg.fs_format})\n• vCPU Cores: ${cfg.cores} Cores\n• RAM Memory: ${cfg.memory_gb} GB\n• GPU Acceleration: ${cfg.gpu_mode}\n• System Navigation: ${cfg.gesture_nav ? "Gesture Navigation (Edge-to-Edge)" : "3-Button Navigation"}\n• UI Form Factor: ${cfg.tablet_mode ? "Tablet Mode (213 dpi / 600+ dp)" : "Standard Phone Mode (240 dpi)"}\n• Close on Exit: ${cfg.close_on_exit ? "Enabled (stop emulator)" : "Disabled (keep running)"}\n• Display Engine: ${displayMode}`,
         isError: false,
       });
     } catch (e) {
@@ -779,7 +791,7 @@ export function App() {
             }`}
           >
             {status.scrcpy_running
-              ? "● Scrcpy Mirror Active (60 FPS)"
+              ? "● Scrcpy Mirror Active"
               : connected
               ? "● Display Live (Embedded)"
               : status.running && displayMode === "sdl"
@@ -804,7 +816,7 @@ export function App() {
                   checked={displayMode === "scrcpy"}
                   onChange={() => setDisplayMode("scrcpy")}
                 />
-                📱 Scrcpy Mirror (60 FPS)
+                📱 Scrcpy Mirror
               </label>
               <label className={`mode-label ${displayMode === "embedded" ? "active" : ""}`}>
                 <input
@@ -830,7 +842,7 @@ export function App() {
           )}
 
           {status.adb_ready && (
-            <button className="btn btn-secondary" onClick={handleLaunchScrcpy} title="Open ultra-fast Scrcpy mirror window with 100% true colors & native touch">
+            <button className="btn btn-secondary" onClick={handleLaunchScrcpy} title="Open Scrcpy mirror window with native touch">
               📱 Open Scrcpy Mirror
             </button>
           )}
@@ -845,11 +857,9 @@ export function App() {
             </button>
           )}
 
-          {!status.running && (
-            <button className="btn btn-secondary" onClick={openSettings} title="Emulator Settings (Runtime, Images, VM Hardware & Preferences)">
-              ⚙ Settings
-            </button>
-          )}
+          <button className="btn btn-secondary" onClick={openSettings} title="Emulator Settings (Runtime, Images, VM Hardware & Preferences)">
+            ⚙ Settings
+          </button>
 
           {displayMode === "embedded" && status.vnc_ready && !connected && (
             <button className="btn btn-secondary" onClick={connectVNC}>
@@ -905,7 +915,7 @@ export function App() {
                 <div className="placeholder-content">
                   <span className="device-icon">📱</span>
                   <h3>Scrcpy Mirror Active</h3>
-                  <p>Android is streaming in ultra-smooth 60 FPS with 100% accurate native sRGB colors & fluid touch.</p>
+                  <p>Android is streaming via low-latency hardware mirror with fluid touch.</p>
                   <p className="subtext">Use your mouse or touchscreen inside the Scrcpy window directly.</p>
                   <button className="btn btn-primary btn-large" onClick={handleLaunchScrcpy} style={{ marginTop: "16px" }}>
                     📱 Re-open Scrcpy Window
@@ -930,7 +940,7 @@ export function App() {
                   <span className="device-icon">🤖</span>
                   <h3>Emulator Ready</h3>
                   <p>
-                    Selected mode: <strong>{displayMode === "scrcpy" ? "📱 Scrcpy Mirror (Ultra-Fluid 60FPS & True Colors)" : displayMode === "embedded" ? "🌐 In-App Embedded Canvas" : "🖥️ Native SDL Window"}</strong>
+                    Selected mode: <strong>{displayMode === "scrcpy" ? "📱 Scrcpy Mirror" : displayMode === "embedded" ? "🌐 In-App Embedded Canvas" : "🖥️ Native SDL Window"}</strong>
                   </p>
                   <button className="btn btn-primary btn-large" onClick={handleStart}>
                     ▶ Launch Android System
@@ -1177,6 +1187,8 @@ interface SettingsModalProps {
     memoryGb: number;
     gpuMode: string;
     closeOnExit: boolean;
+    tabletMode: boolean;
+    gestureNav: boolean;
   };
   setDraft: React.Dispatch<
     React.SetStateAction<{
@@ -1186,6 +1198,8 @@ interface SettingsModalProps {
       memoryGb: number;
       gpuMode: string;
       closeOnExit: boolean;
+      tabletMode: boolean;
+      gestureNav: boolean;
     }>
   >;
   provisioning: boolean;
@@ -1550,7 +1564,7 @@ function SettingsModal({
                   </span>
                 </div>
                 <p className="component-desc">
-                  Direct3D 11 hardware-rendered mirror providing ultra-smooth 60 FPS streaming and 100% accurate sRGB color.
+                  Direct3D 11 hardware-rendered mirror providing low-latency video streaming and touch control.
                 </p>
                 <div className="component-path">
                   <code>{config.scrcpy_path || "tools/scrcpy/scrcpy.exe"}</code>
@@ -1622,7 +1636,7 @@ function SettingsModal({
                     onClick={() => setDisplayMode("scrcpy")}
                   >
                     📱 Scrcpy
-                    <small>60 FPS true color mirror</small>
+                    <small>Hardware-rendered mirror</small>
                   </button>
                   <button
                     className={`seg-btn ${displayMode === "sdl" ? "active" : ""}`}
@@ -1630,6 +1644,54 @@ function SettingsModal({
                   >
                     🖥️ SDL
                     <small>Native DirectX window</small>
+                  </button>
+                </div>
+              </section>
+
+              {/* System Navigation Mode */}
+              <section className="config-section">
+                <span className="section-title">System Navigation</span>
+                <p className="section-help">
+                  Choose navigation mode. Gesture navigation removes bottom bar padding for a clean edge-to-edge view.
+                </p>
+                <div className="seg-control">
+                  <button
+                    className={`seg-btn ${draft.gestureNav ? "active" : ""}`}
+                    onClick={() => setDraft((d) => ({ ...d, gestureNav: true }))}
+                  >
+                    👉 Switch to Gesture Navigation
+                    <small>Edge-to-edge display (Default)</small>
+                  </button>
+                  <button
+                    className={`seg-btn ${!draft.gestureNav ? "active" : ""}`}
+                    onClick={() => setDraft((d) => ({ ...d, gestureNav: false }))}
+                  >
+                    ⏹️ 3-Button Navigation
+                    <small>Classic Back, Home, Recents</small>
+                  </button>
+                </div>
+              </section>
+
+              {/* UI Form Factor & Tablet Mode */}
+              <section className="config-section">
+                <span className="section-title">UI Form Factor (Tablet Mode)</span>
+                <p className="section-help">
+                  Tablet mode sets display density to 213 dpi (600+ dp width), enabling dual-pane layouts, app dock, and tablet multitasking.
+                </p>
+                <div className="seg-control">
+                  <button
+                    className={`seg-btn ${!draft.tabletMode ? "active" : ""}`}
+                    onClick={() => setDraft((d) => ({ ...d, tabletMode: false }))}
+                  >
+                    📱 Standard Phone Mode
+                    <small>240 dpi, standard landscape</small>
+                  </button>
+                  <button
+                    className={`seg-btn ${draft.tabletMode ? "active" : ""}`}
+                    onClick={() => setDraft((d) => ({ ...d, tabletMode: true }))}
+                  >
+                    📟 Tablet Mode (600+ dp)
+                    <small>213 dpi, dual-pane UI & dock</small>
                   </button>
                 </div>
               </section>
