@@ -874,6 +874,56 @@ body, html, #root {
   border: 1px solid rgba(239, 68, 68, 0.3);
 }
 
+.status-badge.dim {
+  background-color: rgba(148, 163, 184, 0.12);
+  color: #94a3b8;
+  border: 1px solid rgba(148, 163, 184, 0.25);
+}
+
+.playstore-card {
+  background-color: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  padding: 14px 16px;
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.playstore-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.playstore-gsf {
+  font-size: 12px;
+  color: var(--text-secondary);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.playstore-gsf code {
+  background: var(--bg-tertiary);
+  padding: 2px 6px;
+  border-radius: 4px;
+  color: #38bdf8;
+  font-family: monospace;
+}
+
+.playstore-gsf a {
+  color: #60a5fa;
+  text-decoration: underline;
+  transition: color 0.15s ease;
+}
+
+.playstore-gsf a:hover {
+  color: #93c5fd;
+}
+
 .optimization-card {
   background-color: var(--bg-primary);
   border: 1px solid var(--border-color);

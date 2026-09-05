@@ -34,6 +34,16 @@ interface ImageConfig {
   close_on_exit: boolean;
   tablet_mode: boolean;
   gesture_nav: boolean;
+  play_store?: boolean;
+}
+
+interface PlayStoreStatus {
+  connected: boolean;
+  play_store_installed: boolean;
+  play_services_installed: boolean;
+  aurora_store_installed: boolean;
+  installed: boolean;
+  gsf_id: string;
 }
 
 interface ProvisionProgress {
@@ -90,6 +100,7 @@ export function App() {
     close_on_exit: true,
     tablet_mode: false,
     gesture_nav: true,
+    play_store: false,
   });
   const [showSettings, setShowSettings] = useState<boolean>(false);
   const [savePopup, setSavePopup] = useState<{ visible: boolean; message: string; isError?: boolean }>({
@@ -121,6 +132,23 @@ export function App() {
     error: false,
   });
   const [provisioning, setProvisioning] = useState<boolean>(false);
+  const [playStoreStatus, setPlayStoreStatus] = useState<PlayStoreStatus>({
+    connected: false,
+    play_store_installed: false,
+    play_services_installed: false,
+    aurora_store_installed: false,
+    installed: false,
+    gsf_id: "",
+  });
+  const [playStoreProgress, setPlayStoreProgress] = useState<ProvisionProgress>({
+    percent: 0,
+    stage: "",
+    message: "",
+    done: false,
+    error: false,
+  });
+  const [integratingPlayStore, setIntegratingPlayStore] = useState<boolean>(false);
+
   const [settingsDraft, setSettingsDraft] = useState<{
     sizeGb: number;
     fs: string;
@@ -130,6 +158,7 @@ export function App() {
     closeOnExit: boolean;
     tabletMode: boolean;
     gestureNav: boolean;
+    playStore: boolean;
   }>({
     sizeGb: 16,
     fs: "ext4",
@@ -139,7 +168,41 @@ export function App() {
     closeOnExit: true,
     tabletMode: false,
     gestureNav: true,
+    playStore: false,
   });
+
+  const checkPlayStore = async () => {
+    try {
+      const res = await invoke<PlayStoreStatus>("check_play_store_status");
+      setPlayStoreStatus(res);
+      return res;
+    } catch {
+      return null;
+    }
+  };
+
+  const handleIntegratePlayStore = async () => {
+    try {
+      setIntegratingPlayStore(true);
+      setPlayStoreProgress({
+        percent: 5,
+        stage: "Starting",
+        message: "Initiating Google Play Store integration...",
+        done: false,
+        error: false,
+      });
+      await invoke("integrate_play_store", { force: true });
+    } catch (e) {
+      setIntegratingPlayStore(false);
+      setPlayStoreProgress({
+        percent: 0,
+        stage: "Error",
+        message: `Failed to initiate integration: ${e}`,
+        done: true,
+        error: true,
+      });
+    }
+  };
 
   const loadImageConfig = async () => {
     try {
@@ -154,6 +217,7 @@ export function App() {
         closeOnExit: cfg.close_on_exit ?? true,
         tabletMode: cfg.tablet_mode ?? false,
         gestureNav: cfg.gesture_nav ?? true,
+        playStore: cfg.play_store ?? false,
       });
       // First run and not yet provisioned -> open settings gate automatically.
       if (!cfg.provisioned && !showSettings) {
@@ -178,6 +242,7 @@ export function App() {
 
   useEffect(() => {
     loadImageConfig();
+    checkPlayStore();
     const timer = setInterval(() => {
       checkStatus();
     }, 1500);
@@ -196,6 +261,21 @@ export function App() {
         if (!p.error) {
           loadImageConfig();
         }
+      }
+    });
+    return () => {
+      unlisten.then((fn) => fn()).catch(() => {});
+    };
+  }, []);
+
+  // Listen for real-time play store integration progress.
+  useEffect(() => {
+    const unlisten = listen<ProvisionProgress>("playstore-progress", (event) => {
+      const p = event.payload;
+      setPlayStoreProgress(p);
+      if (p.done) {
+        setIntegratingPlayStore(false);
+        checkPlayStore();
       }
     });
     return () => {
@@ -527,6 +607,7 @@ export function App() {
   // --- Settings & Runtime handlers ---
   const openSettings = async () => {
     await loadImageConfig();
+    checkPlayStore();
     setShowSettings(true);
   };
 
@@ -541,12 +622,13 @@ export function App() {
         closeOnExit: settingsDraft.closeOnExit,
         tabletMode: settingsDraft.tabletMode,
         gestureNav: settingsDraft.gestureNav,
+        playStore: settingsDraft.playStore,
       });
       setImageConfig(cfg);
       setLogMsg("Settings saved successfully.");
       setSavePopup({
         visible: true,
-        message: `• Partition Size: ${cfg.disk_size_gb} GB (${cfg.fs_format})\n• vCPU Cores: ${cfg.cores} Cores\n• RAM Memory: ${cfg.memory_gb} GB\n• GPU Acceleration: ${cfg.gpu_mode}\n• System Navigation: ${cfg.gesture_nav ? "Gesture Navigation (Edge-to-Edge)" : "3-Button Navigation"}\n• UI Form Factor: ${cfg.tablet_mode ? "Tablet Mode (213 dpi / 600+ dp)" : "Standard Phone Mode (240 dpi)"}\n• Close on Exit: ${cfg.close_on_exit ? "Enabled (stop emulator)" : "Disabled (keep running)"}\n• Display Engine: ${displayMode}`,
+        message: `• Partition Size: ${cfg.disk_size_gb} GB (${cfg.fs_format})\n• vCPU Cores: ${cfg.cores} Cores\n• RAM Memory: ${cfg.memory_gb} GB\n• GPU Acceleration: ${cfg.gpu_mode}\n• Google Play Store: ${cfg.play_store ? "Enabled (Google Services integrated)" : "Disabled (Clean AOSP)"}\n• System Navigation: ${cfg.gesture_nav ? "Gesture Navigation (Edge-to-Edge)" : "3-Button Navigation"}\n• UI Form Factor: ${cfg.tablet_mode ? "Tablet Mode (213 dpi / 600+ dp)" : "Standard Phone Mode (240 dpi)"}\n• Close on Exit: ${cfg.close_on_exit ? "Enabled (stop emulator)" : "Disabled (keep running)"}\n• Display Engine: ${displayMode}`,
         isError: false,
       });
     } catch (e) {
@@ -1062,6 +1144,10 @@ export function App() {
           setDraft={setSettingsDraft}
           provisioning={provisioning}
           provision={provision}
+          playStoreStatus={playStoreStatus}
+          playStoreProgress={playStoreProgress}
+          integratingPlayStore={integratingPlayStore}
+          onIntegratePlayStore={handleIntegratePlayStore}
           isEmulatorRunning={status.running}
           displayMode={displayMode}
           setDisplayMode={setDisplayMode}
@@ -1189,6 +1275,7 @@ interface SettingsModalProps {
     closeOnExit: boolean;
     tabletMode: boolean;
     gestureNav: boolean;
+    playStore: boolean;
   };
   setDraft: React.Dispatch<
     React.SetStateAction<{
@@ -1200,10 +1287,15 @@ interface SettingsModalProps {
       closeOnExit: boolean;
       tabletMode: boolean;
       gestureNav: boolean;
+      playStore: boolean;
     }>
   >;
   provisioning: boolean;
   provision: ProvisionProgress;
+  playStoreStatus: PlayStoreStatus;
+  playStoreProgress: ProvisionProgress;
+  integratingPlayStore: boolean;
+  onIntegratePlayStore: () => void;
   isEmulatorRunning: boolean;
   displayMode: "scrcpy" | "embedded" | "sdl";
   setDisplayMode: (m: "scrcpy" | "embedded" | "sdl") => void;
@@ -1225,6 +1317,10 @@ function SettingsModal({
   setDraft,
   provisioning,
   provision,
+  playStoreStatus,
+  playStoreProgress,
+  integratingPlayStore,
+  onIntegratePlayStore,
   isEmulatorRunning,
   displayMode,
   setDisplayMode,
@@ -1603,6 +1699,24 @@ function SettingsModal({
                   Bundled Python executable used for raw disk partition generation and provisioning utilities.
                 </p>
               </div>
+
+              <div className="component-card">
+                <div className="component-header">
+                  <div className="component-title">
+                    <span className="component-icon">🛍️</span>
+                    <strong>Google Play Store & Services</strong>
+                  </div>
+                  <span className={`status-badge ${playStoreStatus.installed ? "ok" : draft.playStore ? "warn" : "dim"}`}>
+                    {playStoreStatus.installed ? "Installed" : draft.playStore ? "Enabled (Pending Boot)" : "Disabled (Clean AOSP)"}
+                  </span>
+                </div>
+                <p className="component-desc">
+                  microG GmsCore, Phonesky, and Aurora Store client providing Google Play Store compatibility for ARM64 Android 16.
+                </p>
+                <div className="component-path">
+                  <code>{playStoreStatus.installed ? (playStoreStatus.gsf_id ? `GSF ID: ${playStoreStatus.gsf_id}` : "com.android.vending + com.google.android.gms") : "Configure in VM & Hardware tab"}</code>
+                </div>
+              </div>
             </div>
 
             <div className="config-actions">
@@ -1693,6 +1807,87 @@ function SettingsModal({
                     📟 Tablet Mode (600+ dp)
                     <small>213 dpi, dual-pane UI & dock</small>
                   </button>
+                </div>
+              </section>
+
+              {/* Google Play Store & Services */}
+              <section className="config-section">
+                <span className="section-title">Google Play Store & Services</span>
+                <p className="section-help">
+                  Integrate Google Play Services (microG GmsCore), Google Play Store client (Phonesky / Aurora Store), and Google framework into the Android guest.
+                </p>
+                <div className="seg-control">
+                  <button
+                    className={`seg-btn ${draft.playStore ? "active" : ""}`}
+                    onClick={() => setDraft((d) => ({ ...d, playStore: true }))}
+                  >
+                    🛍️ Enable Play Store
+                    <small>Auto-installs GMS & Play Store on boot</small>
+                  </button>
+                  <button
+                    className={`seg-btn ${!draft.playStore ? "active" : ""}`}
+                    onClick={() => setDraft((d) => ({ ...d, playStore: false }))}
+                  >
+                    🛡️ Clean AOSP
+                    <small>Pure open-source AOSP without Google services</small>
+                  </button>
+                </div>
+
+                <div className="playstore-card">
+                  <div className="playstore-header">
+                    <div>
+                      <strong>Live Integration Status: </strong>
+                      <span className={`status-badge ${playStoreStatus.installed ? "ok" : isEmulatorRunning ? "warn" : "dim"}`}>
+                        {playStoreStatus.installed ? "Installed & Active" : isEmulatorRunning ? "Not Installed" : "Emulator Offline"}
+                      </span>
+                    </div>
+                    <button
+                      className="btn btn-secondary btn-sm"
+                      disabled={!isEmulatorRunning || integratingPlayStore}
+                      onClick={onIntegratePlayStore}
+                      title={!isEmulatorRunning ? "Start the emulator first to integrate live" : "Download and install Google Play Store & Services over ADB"}
+                    >
+                      {integratingPlayStore ? "⏳ Integrating…" : playStoreStatus.installed ? "⟳ Reinstall / Update" : "⚡ Integrate Now"}
+                    </button>
+                  </div>
+
+                  {integratingPlayStore && (
+                    <div className="config-progress" style={{ marginTop: "4px" }}>
+                      <div className="progress-track">
+                        <div
+                          className="progress-fill"
+                          style={{ width: `${Math.max(5, playStoreProgress.percent)}%` }}
+                        />
+                      </div>
+                      <div className="progress-meta">
+                        <span>{playStoreProgress.stage || "Installing..."}</span>
+                        <span>{playStoreProgress.percent}%</span>
+                      </div>
+                      {playStoreProgress.message && (
+                        <div className="progress-log">{playStoreProgress.message}</div>
+                      )}
+                    </div>
+                  )}
+
+                  {playStoreStatus.gsf_id ? (
+                    <div className="playstore-gsf">
+                      <span>GSF Device ID:</span>
+                      <code>{playStoreStatus.gsf_id}</code>
+                      <a
+                        href="https://www.google.com/android/uncertified/"
+                        target="_blank"
+                        rel="noreferrer"
+                        title="Open Google Play uncertified device registration page"
+                      >
+                        Register GSF ID ↗
+                      </a>
+                    </div>
+                  ) : playStoreStatus.installed ? (
+                    <div className="playstore-gsf">
+                      <span>Package status:</span>
+                      <code>GmsCore + Phonesky Active</code>
+                    </div>
+                  ) : null}
                 </div>
               </section>
 

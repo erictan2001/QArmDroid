@@ -81,6 +81,7 @@ jobs:
           Copy-Item tools/provision_bundle.ps1 src-tauri/resources/tools/ -Force -ErrorAction SilentlyContinue
           Copy-Item tools/m0_build.py src-tauri/resources/tools/ -Force -ErrorAction SilentlyContinue
           Copy-Item tools/imgtools.py src-tauri/resources/tools/ -Force -ErrorAction SilentlyContinue
+          Copy-Item tools/integrate_play_store.ps1 src-tauri/resources/tools/ -Force -ErrorAction SilentlyContinue
 
       - name: Type check and build frontend
         run: npm run build

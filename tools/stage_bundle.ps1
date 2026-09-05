@@ -147,7 +147,7 @@ if (Test-Path $pth) {
     $c = Get-Content $pth -Raw
     if ($c -notmatch "Lib\\") { Add-Content $pth "Lib\" }
 }
-foreach ($n in @("launch.ps1","provision_bundle.ps1","m0_build.py","imgtools.py")) {
+foreach ($n in @("launch.ps1","provision_bundle.ps1","m0_build.py","imgtools.py","integrate_play_store.ps1")) {
     $s = Join-Path (Join-Path $RepoRoot "tools") $n
     if (Test-Path $s) { Copy-Item $s (Join-Path $ResDir "tools") -Force }
 }

@@ -224,6 +224,7 @@ struct ImageConfig {
     close_on_exit: bool,
     tablet_mode: bool,
     gesture_nav: bool,
+    play_store: bool,
 }
 
 /// Resolve the writable runtime root where the bundled install provisions
@@ -268,6 +269,7 @@ fn read_image_config() -> ImageConfig {
     let mut close_on_exit = true;
     let mut tablet_mode = false;
     let mut gesture_nav = true;
+    let mut play_store = false;
 
     let cfg_path = rt.join("image_config.json");
     if let Ok(contents) = fs::read_to_string(&cfg_path) {
@@ -294,6 +296,9 @@ fn read_image_config() -> ImageConfig {
         }
         if let Some(v) = extract_json_bool(&contents, "gesture_nav") {
             gesture_nav = v;
+        }
+        if let Some(v) = extract_json_bool(&contents, "play_store") {
+            play_store = v;
         }
     }
 
@@ -383,6 +388,7 @@ fn read_image_config() -> ImageConfig {
         close_on_exit,
         tablet_mode,
         gesture_nav,
+        play_store,
     }
 }
 
@@ -775,6 +781,7 @@ fn start_emulator_with(
             // In the background, auto-connect ADB and apply display/nav mode once booted
             let tablet_mode_copy = cfg.tablet_mode;
             let gesture_nav_copy = cfg.gesture_nav;
+            let play_store_copy = cfg.play_store;
             std::thread::spawn(move || {
                 for _ in 0..60 {
                     std::thread::sleep(Duration::from_secs(2));
@@ -786,6 +793,9 @@ fn start_emulator_with(
                                     if let Ok(b_out) = adb_cmd().args(&["-s", "127.0.0.1:5555", "shell", "getprop", "sys.boot_completed"]).output() {
                                         if String::from_utf8_lossy(&b_out.stdout).trim() == "1" {
                                             apply_android_display_and_nav(tablet_mode_copy, gesture_nav_copy);
+                                            if play_store_copy {
+                                                auto_integrate_play_store_if_needed();
+                                            }
                                             break;
                                         }
                                     }
@@ -1123,6 +1133,7 @@ fn save_image_config(
     close_on_exit: Option<bool>,
     tablet_mode: Option<bool>,
     gesture_nav: Option<bool>,
+    play_store: Option<bool>,
 ) -> Result<ImageConfig, String> {
     let rt = runtime_root();
     let cfg_path = rt.join("image_config.json");
@@ -1138,10 +1149,11 @@ fn save_image_config(
     let close_val = close_on_exit.unwrap_or(true);
     let tablet_val = tablet_mode.unwrap_or(false);
     let gesture_val = gesture_nav.unwrap_or(true);
+    let play_store_val = play_store.unwrap_or(false);
 
     let json = format!(
-        "{{\"userdata_size_gb\":{},\"userdata_fs\":\"{}\",\"cores\":{},\"memory_gb\":{},\"gpu_mode\":\"{}\",\"close_on_exit\":{},\"tablet_mode\":{},\"gesture_nav\":{},\"provisioned\":{}}}",
-        disk_size_gb, fs_format, cores_val, mem_val, gpu_val, close_val, tablet_val, gesture_val, cfg_provisioned
+        "{{\"userdata_size_gb\":{},\"userdata_fs\":\"{}\",\"cores\":{},\"memory_gb\":{},\"gpu_mode\":\"{}\",\"close_on_exit\":{},\"tablet_mode\":{},\"gesture_nav\":{},\"play_store\":{},\"provisioned\":{}}}",
+        disk_size_gb, fs_format, cores_val, mem_val, gpu_val, close_val, tablet_val, gesture_val, play_store_val, cfg_provisioned
     );
     if let Some(parent) = cfg_path.parent() {
         let _ = fs::create_dir_all(parent);
@@ -1396,6 +1408,225 @@ async fn provision_image(
     Ok("Image provisioning started in the background.".to_string())
 }
 
+#[derive(Serialize, Clone, Debug)]
+struct PlayStoreStatus {
+    connected: bool,
+    play_store_installed: bool,
+    play_services_installed: bool,
+    aurora_store_installed: bool,
+    installed: bool,
+    gsf_id: String,
+}
+
+#[derive(Serialize, Clone, Debug)]
+struct PlayStoreProgress {
+    percent: u32,
+    stage: String,
+    message: String,
+    done: bool,
+    error: bool,
+}
+
+static PLAY_STORE_INTEGRATING: Mutex<bool> = Mutex::new(false);
+
+#[tauri::command]
+fn check_play_store_status() -> PlayStoreStatus {
+    let target = "127.0.0.1:5555";
+    let connected = if is_port_open(5555, 100) {
+        let mut cmd = adb_cmd();
+        cmd.args(&["-s", target, "get-state"]);
+        let out = run_with_timeout(&mut cmd, Duration::from_secs(3));
+        String::from_utf8_lossy(&out.stdout).trim() == "device"
+    } else {
+        false
+    };
+
+    if !connected {
+        return PlayStoreStatus {
+            connected: false,
+            play_store_installed: false,
+            play_services_installed: false,
+            aurora_store_installed: false,
+            installed: false,
+            gsf_id: String::new(),
+        };
+    }
+
+    let mut pkgs_cmd = adb_cmd();
+    pkgs_cmd.args(&["-s", target, "shell", "pm", "list", "packages"]);
+    let pkgs_out = run_with_timeout(&mut pkgs_cmd, Duration::from_secs(5));
+    let pkgs_str = String::from_utf8_lossy(&pkgs_out.stdout);
+
+    let play_store_installed = pkgs_str.contains("com.android.vending");
+    let play_services_installed = pkgs_str.contains("com.google.android.gms") || pkgs_str.contains("org.microg.gms");
+    let aurora_store_installed = pkgs_str.contains("com.aurora.store");
+
+    let mut gsf_id = String::new();
+    let mut gsf_cmd = adb_cmd();
+    gsf_cmd.args(&["-s", target, "shell", "content", "query", "--uri", "content://com.google.android.gsf.gservices", "--where", "name='android_id'"]);
+    let gsf_out = run_with_timeout(&mut gsf_cmd, Duration::from_secs(3));
+    let gsf_str = String::from_utf8_lossy(&gsf_out.stdout);
+    if let Some(pos) = gsf_str.find("value=") {
+        let val_part = &gsf_str[pos + 6..];
+        let id_str = val_part.split_whitespace().next().unwrap_or("").trim();
+        if !id_str.is_empty() {
+            gsf_id = id_str.to_string();
+        }
+    }
+
+    PlayStoreStatus {
+        connected: true,
+        play_store_installed,
+        play_services_installed,
+        aurora_store_installed,
+        installed: play_store_installed && play_services_installed,
+        gsf_id,
+    }
+}
+
+#[tauri::command]
+async fn integrate_play_store(app: tauri::AppHandle, force: Option<bool>) -> Result<String, String> {
+    {
+        let mut busy = PLAY_STORE_INTEGRATING.lock().unwrap();
+        if *busy {
+            return Err("Play Store integration is already running".to_string());
+        }
+        *busy = true;
+    }
+
+    let force_flag = force.unwrap_or(false);
+    let rt = runtime_root();
+    let script = rt.join("tools").join("integrate_play_store.ps1");
+    let script_path = if script.exists() {
+        script
+    } else if let Ok(repo) = find_repo_root() {
+        repo.join("tools").join("integrate_play_store.ps1")
+    } else if let Some(res) = install_resources() {
+        res.join("tools").join("integrate_play_store.ps1")
+    } else {
+        *PLAY_STORE_INTEGRATING.lock().unwrap() = false;
+        return Err("integrate_play_store.ps1 script not found".to_string());
+    };
+
+    let adb = get_adb_path();
+    let app_handle = app.clone();
+
+    std::thread::spawn(move || {
+        let emit = |p: &PlayStoreProgress| {
+            let _ = app_handle.emit("playstore-progress", p.clone());
+        };
+
+        emit(&PlayStoreProgress {
+            percent: 5,
+            stage: "Starting".into(),
+            message: "Launching Play Store integration script...".into(),
+            done: false,
+            error: false,
+        });
+
+        let mut cmd = Command::new("powershell.exe");
+        #[cfg(windows)]
+        cmd.creation_flags(CREATE_NO_WINDOW);
+        cmd.arg("-NoProfile")
+           .arg("-ExecutionPolicy").arg("Bypass")
+           .arg("-File").arg(&script_path)
+           .arg("-AdbPath").arg(&adb);
+        if force_flag {
+            cmd.arg("-Force");
+        }
+        cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+
+        let mut child = match cmd.spawn() {
+            Ok(c) => c,
+            Err(e) => {
+                emit(&PlayStoreProgress {
+                    percent: 0,
+                    stage: "Error".into(),
+                    message: format!("Failed to spawn powershell: {}", e),
+                    done: true,
+                    error: true,
+                });
+                *PLAY_STORE_INTEGRATING.lock().unwrap() = false;
+                return;
+            }
+        };
+
+        let stdout = child.stdout.take();
+        if let Some(pipe) = stdout {
+            let reader = std::io::BufReader::new(pipe);
+            for line in reader.lines().flatten() {
+                let trimmed = line.trim();
+                if trimmed.starts_with("PROGRESS ") {
+                    let content = &trimmed["PROGRESS ".len()..];
+                    let (info, msg) = if let Some(sep) = content.find(" :: ") {
+                        (&content[..sep], content[sep + 4..].to_string())
+                    } else {
+                        (content, String::new())
+                    };
+                    let mut parts = info.split_whitespace();
+                    let pct: u32 = parts.next().and_then(|p| p.parse().ok()).unwrap_or(0);
+                    let stage = parts.collect::<Vec<_>>().join(" ");
+                    emit(&PlayStoreProgress {
+                        percent: pct,
+                        stage: if stage.is_empty() { "Working".into() } else { stage },
+                        message: msg,
+                        done: pct >= 100,
+                        error: false,
+                    });
+                }
+            }
+        }
+
+        let exit_status = child.wait();
+        let success = exit_status.map(|s| s.success()).unwrap_or(false);
+        emit(&PlayStoreProgress {
+            percent: if success { 100 } else { 0 },
+            stage: if success { "Done".into() } else { "Error".into() },
+            message: if success {
+                "Google Play Store integration completed successfully!".into()
+            } else {
+                "Integration script completed with errors.".into()
+            },
+            done: true,
+            error: !success,
+        });
+
+        *PLAY_STORE_INTEGRATING.lock().unwrap() = false;
+    });
+
+    Ok("Play Store integration started in background".to_string())
+}
+
+fn auto_integrate_play_store_if_needed() {
+    let target = "127.0.0.1:5555";
+    let mut pkgs_cmd = adb_cmd();
+    pkgs_cmd.args(&["-s", target, "shell", "pm", "list", "packages", "com.android.vending"]);
+    let out = run_with_timeout(&mut pkgs_cmd, Duration::from_secs(5));
+    let out_str = String::from_utf8_lossy(&out.stdout);
+    if !out_str.contains("com.android.vending") {
+            let rt = runtime_root();
+            let script = rt.join("tools").join("integrate_play_store.ps1");
+            let script_path = if script.exists() {
+                script
+            } else if let Ok(repo) = find_repo_root() {
+                repo.join("tools").join("integrate_play_store.ps1")
+            } else if let Some(res) = install_resources() {
+                res.join("tools").join("integrate_play_store.ps1")
+            } else {
+                return;
+            };
+            let adb = get_adb_path();
+            let mut cmd = Command::new("powershell.exe");
+            #[cfg(windows)]
+            cmd.creation_flags(CREATE_NO_WINDOW);
+            cmd.arg("-NoProfile")
+               .arg("-ExecutionPolicy").arg("Bypass")
+               .arg("-File").arg(&script_path)
+               .arg("-AdbPath").arg(&adb);
+            let _ = cmd.spawn();
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -1430,7 +1661,9 @@ pub fn run() {
             save_image_config,
             apply_system_ui_settings,
             provision_image,
-            open_runtime_folder
+            open_runtime_folder,
+            check_play_store_status,
+            integrate_play_store
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
