@@ -39,9 +39,15 @@ if (-not $QemuDir)      { $QemuDir      = Join-Path $GfxDir "qemu" }
 if (-not $GfxstreamDir) { $GfxstreamDir = Join-Path $GfxDir "gfxstream" }
 
 # ------------------------------------------------------------ helpers ----- #
-function Test-Patched($repoDir, $marker) {
+function Test-Patched($repoDir, $marker, $targetRelPath = $null) {
     # marker: a string that exists ONLY after our patch is applied
     if (-not (Test-Path $repoDir)) { return $false }
+    if ($targetRelPath) {
+        $targetFile = Join-Path $repoDir $targetRelPath
+        if (Test-Path $targetFile) {
+            return (Select-String -Path $targetFile -Pattern $marker -SimpleMatch -Quiet -ErrorAction SilentlyContinue)
+        }
+    }
     $hit = Get-ChildItem -Path $repoDir -Recurse -Include *.c,*.cpp,*.h -ErrorAction SilentlyContinue |
         Select-String -Pattern $marker -SimpleMatch -List -ErrorAction SilentlyContinue
     return ($null -ne $hit)
@@ -76,10 +82,21 @@ function Apply-GitPatch($repoDir, $patchFile, $label) {
     finally { Pop-Location }
 }
 
+# ------------------------------------------------------------ submodules --- #
+foreach ($sub in @(
+    @{ Path = $QemuDir; Rel = "tools/qemu-gfxstream/qemu"; Name = "qemu" },
+    @{ Path = $GfxstreamDir; Rel = "tools/qemu-gfxstream/gfxstream"; Name = "gfxstream" }
+)) {
+    if (-not (Test-Path (Join-Path $sub.Path ".git"))) {
+        Write-Host "[submodule] $($sub.Name) not initialized - running git submodule update..." -ForegroundColor Cyan
+        git -C $RepoRoot submodule update --init --recursive $sub.Rel
+    }
+}
+
 # ------------------------------------------------------------ qemu patch --- #
 Write-Host "== QEMU patches ==" -ForegroundColor Cyan
 $qemuPatch = Join-Path $PatchRoot "qemu\0001-gfxstream-sdl-color-hid.patch"
-if (Test-Patched $QemuDir "renderer-features") {
+if (Test-Patched $QemuDir "renderer-features" "hw\display\virtio-gpu-rutabaga.c") {
     Write-Host "[qemu] already patched (renderer-features present) - skipping." -ForegroundColor DarkGray
 } else {
     Apply-GitPatch $QemuDir $qemuPatch "qemu"
@@ -92,7 +109,7 @@ $shimsSrc  = Join-Path $PatchRoot "gfxstream\windows-shims"
 $glesHdr   = Join-Path $PatchRoot "gfxstream\gles_compat.h"
 $glesHdr2  = Join-Path $PatchRoot "gfxstream\host\gles_compat.h"   # (subpath copy)
 
-if (Test-Patched $GfxstreamDir "gles_compat") {
+if (Test-Patched $GfxstreamDir "gles_compat" "host\frame_buffer.h") {
     Write-Host "[gfxstream] already patched (gles_compat.h present) - skipping." -ForegroundColor DarkGray
 } else {
     Apply-GitPatch $GfxstreamDir $gfxPatch "gfxstream"

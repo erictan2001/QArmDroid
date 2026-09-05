@@ -27,10 +27,27 @@ GPU — fully usable today: **boot, display, touch, keyboard, audio, ADB**.
 
 ## 🚀 Quick Start (Reproduce from a fresh clone)
 
+### 1. Set Up the Repository
+
+Clone the repository and initialize the required submodules (`qemu` and `gfxstream` forks):
+
 ```powershell
-cd <your-clone-location>\QArmDroid
+# Clone the repository
+git clone https://github.com/erictan2001/QArmDroid.git
+cd QArmDroid
+
+# Initialize required submodules (pointed to erictan2001 forks)
+git submodule update --init --recursive tools/qemu-gfxstream/qemu tools/qemu-gfxstream/gfxstream
+```
+
+> [!TIP]
+> Initializing the specific submodules above (`tools/qemu-gfxstream/qemu` and `tools/qemu-gfxstream/gfxstream`) avoids downloading the massive ~10 GB Android kernel source tree (`kernel-src/common`), which is not needed for building or running the emulator.
+
+### 2. Environment & Boot Pipeline
+
+```powershell
 .\tools\bootstrap_env.ps1     # 1. detect python/adb/qemu -> tools\env.json
-.\tools\apply_patches.ps1     # 2. apply custom QEMU/gfxstream patches (idempotent)
+.\tools\apply_patches.ps1     # 2. verify / apply custom patches (idempotent; pre-baked into forks)
 .\tools\setup_image.ps1 -ImageZip C:\path\to\aosp_cf_arm64_only_phone-img-<build>.zip   # 3. unpack image (first run only)
 .\tools\reproduce.ps1         # 4. build bootconfig->initrd->disk + launch + verify
 ```
@@ -132,12 +149,13 @@ QArmDroid/
 ### How the repo stays reproducible
 
 The nested repos `tools/qemu-gfxstream/qemu` and `gfxstream` are **submodules**
-pinned to upstream commits. All local modifications (ExternalBlob
-`renderer-features` property, SDL color-format mapping, USB HID fix, gfxstream
-Windows bincompat + POSIX shim headers) live in
-`tools/qemu-gfxstream/patches/` and are applied by `apply_patches.ps1`
-(idempotent — re-running skips already-applied patches). A fresh clone gets
-the patches, the pure-Python build tools, and only needs the image + python +
+pointed directly to our GitHub forks ([`erictan2001/qemu`](https://github.com/erictan2001/qemu) and
+[`erictan2001/gfxstream`](https://github.com/erictan2001/gfxstream) on branch `qarmdroid`).
+All local modifications (ExternalBlob `renderer-features` property, SDL color-format mapping,
+USB HID fix, gfxstream Windows bincompat + POSIX shim headers) are baked into these forks
+and preserved in `tools/qemu-gfxstream/patches/` for reference and idempotent offline
+application via `apply_patches.ps1`. A fresh clone gets the full working trees via
+`git submodule update --init`, the pure-Python build tools, and only needs the image + python +
 ADB + QEMU from outside the repo.
 
 ---
