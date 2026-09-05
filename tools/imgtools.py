@@ -29,6 +29,7 @@ All functions are deterministic and dependency-free (stdlib only).
 """
 import os
 import struct
+import subprocess
 import zlib
 
 # -------------------------------------------------------------------------- #
@@ -194,6 +195,13 @@ def unsparse(data: bytes) -> bytes:
 
 def sparse_to_file(src_path: str, dst_path: str) -> None:
     """Stream unsparse src (raw or sparse) into dst, bounded memory."""
+    try:
+        if not os.path.exists(dst_path):
+            open(dst_path, "wb").close()
+            subprocess.run(["fsutil", "sparse", "setflag", dst_path], capture_output=True)
+    except Exception:
+        pass
+
     with open(src_path, "rb") as src:
         head = src.read(28)
         if len(head) < 28 or struct.unpack_from("<I", head, 0)[0] != SPARSE_MAGIC:
@@ -214,7 +222,8 @@ def sparse_to_file(src_path: str, dst_path: str) -> None:
             # v1.1+ 16-byte header has a 4-byte total_sz; v1.0 12-byte does not.
             pass
         src.seek(hdr_sz)
-        with open(dst_path, "wb") as dst:
+        mode = "r+b" if os.path.exists(dst_path) else "wb"
+        with open(dst_path, mode) as dst:
             for _ in range(nchunks):
                 ch = src.read(chsz)
                 (ctype, _res, csz) = struct.unpack_from("<HHI", ch, 0)
@@ -222,13 +231,17 @@ def sparse_to_file(src_path: str, dst_path: str) -> None:
                     dst.write(src.read(csz * blk_sz))
                 elif ctype == CHUNK_FILL:
                     fill = src.read(4)
-                    dst.write(fill * (csz * blk_sz // 4))
+                    if fill == b"\x00\x00\x00\x00":
+                        dst.seek(dst.tell() + (csz * blk_sz))
+                    else:
+                        dst.write(fill * (csz * blk_sz // 4))
                 elif ctype == CHUNK_DONT_CARE:
-                    dst.write(b"\x00" * (csz * blk_sz))
+                    dst.seek(dst.tell() + (csz * blk_sz))
                 elif ctype == CHUNK_CRC32:
                     src.read(4)
                 else:
                     raise ValueError(f"unknown chunk 0x{ctype:04X}")
+            dst.truncate(total_blks * blk_sz)
 
 
 def simg2img(src_path: str, dst_path: str) -> None:

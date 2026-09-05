@@ -32,7 +32,8 @@
       "resources/qemu/**/*",
       "resources/image/**/*",
       "resources/tools/**/*",
-      "resources/python/**/*"
+      "resources/python/**/*",
+      "resources/scrcpy/**/*"
     ],
     "icon": [
       "icons/32x32.png",

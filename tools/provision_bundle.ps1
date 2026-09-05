@@ -103,6 +103,7 @@ $toolsSrc = Join-Path $InstallRoot "tools"
         if (-not (Test-Path $pythonSrc)) {
             Emit-Progress 0 ("ERROR: Python runtime not found in installer resources ($pythonSrc). Reinstall the app.")
             Write-Error "Python runtime missing at $pythonSrc - cannot build disk.raw"
+            exit 1
         }
         Copy-Item $pythonSrc -Recurse -Destination $pythonDst -Force
     }
@@ -171,20 +172,6 @@ if ($needSync) {
         Copy-Item (Join-Path $toolsSrc "*") $toolsDst -Recurse -Force
     }
 
-    # --------------------------------------------------------------- python ------ #
-    Emit-Progress 55 "Ensuring Python runtime"
-    Write-Host "== syncing Python ==" -ForegroundColor Cyan
-    $pythonSrc = Join-Path $InstallRoot "python"
-    $pythonDst = Join-Path $RuntimeRoot "python"
-    if (-not (Test-Path $pythonDst)) {
-        if (-not (Test-Path $pythonSrc)) {
-            Emit-Progress 0 ("ERROR: Python runtime not found in installer resources ($pythonSrc). Reinstall the app.")
-            Write-Error "Python runtime missing at $pythonSrc - cannot build disk.raw"
-        }
-        Write-Host "  copying Python embeddable..." -ForegroundColor Cyan
-        Copy-Item $pythonSrc -Recurse -Destination $pythonDst -Force
-    }
-
     # --------------------------------------------------------------- disk.raw --- #
 } else {
     Write-Host "runtime already provisioned (use -Force to re-sync)" -ForegroundColor DarkGray
@@ -241,6 +228,7 @@ if (-not $needDiskBuild) {
     if (-not (Test-Path $superImg)) {
         Emit-Progress 0 "ERROR: super.img missing"
         Write-Error "super.img missing in $imgDst (and $imgSrc) - cannot build disk.raw"
+        exit 1
     }
     Emit-Progress 60 ("Building disk.raw ($DiskSizeGB GB, $FsFormat)")
     Write-Host "== building disk.raw (this takes a while) ==" -ForegroundColor Cyan
@@ -260,16 +248,18 @@ if (-not $needDiskBuild) {
             if ($LASTEXITCODE -ne 0) {
                 Emit-Progress 0 ("ERROR: m0_build $stg failed (exit $LASTEXITCODE)")
                 Write-Error "m0_build $stg stage failed (exit $LASTEXITCODE)"
+                exit 1
             }
         }
     }
     finally { Pop-Location }
-    if (Test-Path $disk) {
-        Emit-Progress 100 ("disk.raw built: $((Get-Item $disk).Length/1GB) GB")
-        Write-Host "disk.raw built: $((Get-Item $disk).Length/1GB) GB" -ForegroundColor Green
+    if ((Test-Path $disk) -and ((Get-Item $disk).Length -gt 0)) {
+        Emit-Progress 100 ("disk.raw built: $([Math]::Round((Get-Item $disk).Length/1GB, 2)) GB")
+        Write-Host "disk.raw built: $([Math]::Round((Get-Item $disk).Length/1GB, 2)) GB" -ForegroundColor Green
     } else {
-        Emit-Progress 0 "ERROR: disk.raw not produced"
-        Write-Error "disk.raw not produced"
+        Emit-Progress 0 "ERROR: disk.raw not produced or empty"
+        Write-Error "disk.raw not produced or empty"
+        exit 1
     }
 }
 

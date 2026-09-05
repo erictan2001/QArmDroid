@@ -14,12 +14,15 @@ What it fixes vs the original broken pipeline:
 """
 import os, sys, struct, subprocess, zlib, hashlib
 
-ROOT = r"C:\Users\erict\OneDrive\Desktop\Arm64AndroidEmulator"
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(SCRIPT_DIR)
 IMG = os.path.join(ROOT, "aosp_cf_arm64_only_phone-img")
 WORK = os.path.join(IMG, "work", "m0")
 MSYS_BIN = r"C:\msys64\clangarm64\bin"
+
 # Pure-Python image tools (lz4 / sparse / cpio) — no external binaries needed.
-sys.path.insert(0, os.path.join(ROOT, "tools"))
+if SCRIPT_DIR not in sys.path:
+    sys.path.insert(0, SCRIPT_DIR)
 import imgtools
 LZ4 = os.path.join(MSYS_BIN, "lz4.exe")      # optional fallback only
 
@@ -31,11 +34,17 @@ QARM_FS = os.environ.get("QARM_FS", "ext4").strip().lower()    # ext4 | f2fs
 if QARM_FS not in ("ext4", "f2fs"):
     QARM_FS = "ext4"
 
-if len(sys.argv) >= 3 and sys.argv[2].startswith("QARM_BUNDLE="):
-    BUNDLE = sys.argv[2].split("=", 1)[1]
+BUNDLE = os.environ.get("QARM_BUNDLE")
+for arg in sys.argv[1:]:
+    if arg.startswith("QARM_BUNDLE="):
+        BUNDLE = arg.split("=", 1)[1]
+
+if BUNDLE:
     IMG = os.path.join(BUNDLE, "image")       # super.img, boot.img, ... here
     WORK = os.path.join(BUNDLE, "image")      # disk.raw lands next to inputs
-    sys.path.insert(0, os.path.join(BUNDLE, "tools"))  # imgtools.py from bundle
+    tools_dir = os.path.join(BUNDLE, "tools")
+    if os.path.exists(tools_dir) and tools_dir not in sys.path:
+        sys.path.insert(0, tools_dir)
     # Bundle-scoped overrides (set by provision_bundle.ps1).
     _gb = int(os.environ.get("QARM_DISK_GB", "0"))
     if _gb:
@@ -209,13 +218,20 @@ def write_at(disk_path: str, lba: int, src_path: str):
     off = lba * SECTOR
     size = os.path.getsize(src_path)
     CHUNK = 4 << 20
+    zero_chunk = b"\x00" * CHUNK
     with open(disk_path, "r+b") as dst, open(src_path, "rb") as src:
         dst.seek(off)
         n = 0
         while True:
             b = src.read(CHUNK)
             if not b: break
-            dst.write(b); n += len(b)
+            if len(b) == CHUNK and b == zero_chunk:
+                dst.seek(dst.tell() + CHUNK)
+            elif b == b"\x00" * len(b):
+                dst.seek(dst.tell() + len(b))
+            else:
+                dst.write(b)
+            n += len(b)
     print(f"    wrote {size/1e9:.2f} GB -> lba {lba}")
 
 def cpio_newc(files: dict) -> bytes:
@@ -411,9 +427,9 @@ def main():
         # socket ioctls (10.0.2.15/24, gw 10.0.2.2 = QEMU slirp), then
         # execs the real first-stage init as /init.orig. Network state
         # is kernel-global so it survives every switch_root after.
-        wrapper = open(os.path.join(ROOT, "tools", "init_wrapper.elf"), "rb").read()
-        touch_daemon_bin = open(os.path.join(ROOT, "tools", "touch_daemon.elf"), "rb").read()
-        stub_daemon_bin = open(os.path.join(ROOT, "tools", "stub_daemon.elf"), "rb").read()
+        wrapper = open(os.path.join(SCRIPT_DIR, "init_wrapper.elf"), "rb").read()
+        touch_daemon_bin = open(os.path.join(SCRIPT_DIR, "touch_daemon.elf"), "rb").read()
+        stub_daemon_bin = open(os.path.join(SCRIPT_DIR, "stub_daemon.elf"), "rb").read()
         tablet_idc_content = (
             "touch.deviceType = touchScreen\n"
             "touch.orientationAware = 1\n"
@@ -463,7 +479,12 @@ def main():
             print("[3/5] super_raw.img already present")
 
     if stage in ("all", "disk"):
-        super_size = os.path.getsize(os.path.join(WORK, "super_raw.img"))
+        super_raw_path = os.path.join(WORK, "super_raw.img")
+        if not os.path.exists(super_raw_path) or os.path.getsize(super_raw_path) < 8_000_000_000:
+            print("PROGRESS 62 Unsparsing super.img -> 8.59 GB raw...")
+            print("[3/5] unsparse super.img -> 8.59 GB raw")
+            sparse_copy(os.path.join(IMG, "super.img"), super_raw_path)
+        super_size = os.path.getsize(super_raw_path)
         GB = 1024**3
         MB = 1024**2
         # canonical cuttlefish composite-disk layout

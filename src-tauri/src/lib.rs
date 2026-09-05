@@ -1254,6 +1254,7 @@ async fn provision_image(
         },
     );
 
+    let rt_clone = rt.clone();
     // Spawn the blocking work on a dedicated thread; the async command returns
     // immediately so the webview event loop never stalls.
     std::thread::spawn(move || {
@@ -1273,7 +1274,7 @@ async fn provision_image(
                     percent: 0,
                     stage: "Error".into(),
                     message: format!("Failed to start provisioning: {}", e),
-                    done: false,
+                    done: true,
                     error: true,
                 });
                 *PROVISIONING.lock().unwrap() = false;
@@ -1281,34 +1282,62 @@ async fn provision_image(
             }
         };
 
+        let stderr_handle = child.stderr.take().map(|err_pipe| {
+            std::thread::spawn(move || {
+                let reader = std::io::BufReader::new(err_pipe);
+                let mut last_err = String::new();
+                for line in reader.lines().flatten() {
+                    let trimmed = line.trim();
+                    if !trimmed.is_empty() {
+                        last_err = trimmed.to_string();
+                    }
+                }
+                last_err
+            })
+        });
+
+        let mut had_error = false;
+        let mut last_error_msg = String::new();
+
         // Stream stdout, parse `PROGRESS <pct> <stage>` lines, forward them.
         if let Some(out) = child.stdout.take() {
             let reader = std::io::BufReader::new(out);
-            for line in reader.lines() {
-                if let Ok(l) = line {
-                    let trimmed = l.trim();
-                    if let Some(rest) = trimmed.strip_prefix("PROGRESS ") {
-                        let mut parts = rest.splitn(2, ' ');
-                        if let (Some(pct_s), Some(stage)) = (parts.next(), parts.next()) {
-                            if let Ok(pct) = pct_s.parse::<u32>() {
-                                let is_err = stage.to_lowercase().contains("error");
-                                emit(&ProvisionProgress {
-                                    percent: pct.min(100),
-                                    stage: stage.to_string(),
-                                    message: l,
-                                    done: pct >= 100 && !is_err,
-                                    error: is_err,
-                                });
+            for line in reader.lines().flatten() {
+                let trimmed = line.trim();
+                if let Some(rest) = trimmed.strip_prefix("PROGRESS ") {
+                    let mut parts = rest.splitn(2, ' ');
+                    if let (Some(pct_s), Some(stage)) = (parts.next(), parts.next()) {
+                        if let Ok(pct) = pct_s.parse::<u32>() {
+                            let is_err = stage.to_lowercase().contains("error");
+                            if is_err {
+                                had_error = true;
+                                last_error_msg = stage.to_string();
                             }
+                            emit(&ProvisionProgress {
+                                percent: pct.min(100),
+                                stage: stage.to_string(),
+                                message: line.clone(),
+                                done: false,
+                                error: is_err,
+                            });
                         }
                     }
                 }
             }
         }
 
-        // Wait for completion and emit the terminal state.
-        match child.wait() {
-            Ok(s) if s.success() => {
+        let stderr_msg = stderr_handle.and_then(|h| h.join().ok()).unwrap_or_default();
+        if !stderr_msg.is_empty() && last_error_msg.is_empty() {
+            last_error_msg = stderr_msg;
+        }
+
+        // Wait for completion and verify disk.raw was actually produced.
+        let wait_res = child.wait();
+        let disk = rt_clone.join("image").join("disk.raw");
+        let disk_ok = disk.exists() && fs::metadata(&disk).map(|m| m.len() > 0).unwrap_or(false);
+
+        match wait_res {
+            Ok(s) if s.success() && !had_error && disk_ok => {
                 emit(&ProvisionProgress {
                     percent: 100,
                     stage: "Complete".into(),
@@ -1318,11 +1347,18 @@ async fn provision_image(
                 });
             }
             Ok(s) => {
+                let msg = if !last_error_msg.is_empty() {
+                    last_error_msg
+                } else if !disk_ok {
+                    "Provisioning completed but disk.raw was not created or is empty.".to_string()
+                } else {
+                    format!("Provisioning exited with status {}", s)
+                };
                 emit(&ProvisionProgress {
                     percent: 0,
                     stage: "Error".into(),
-                    message: format!("Provisioning exited with status {}", s),
-                    done: false,
+                    message: msg,
+                    done: true,
                     error: true,
                 });
             }
@@ -1331,7 +1367,7 @@ async fn provision_image(
                     percent: 0,
                     stage: "Error".into(),
                     message: format!("Failed to wait on provisioning: {}", e),
-                    done: false,
+                    done: true,
                     error: true,
                 });
             }
