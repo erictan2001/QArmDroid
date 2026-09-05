@@ -1,10 +1,15 @@
-﻿import struct
+import struct
 import os
 
-IMG_DIR = r"C:\Users\erict\AppData\Local\Android\Sdk\system-images\android-34\google_apis\arm64-v8a"
-WORK_DIR = r"C:\Users\erict\OneDrive\Desktop\Arm64AndroidEmulator\work_sdk"
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+ROOT_DIR = os.path.dirname(SCRIPT_DIR)
+LOCALAPPDATA = os.environ.get("LOCALAPPDATA", os.path.expanduser("~\\AppData\\Local"))
+
+IMG_DIR = os.environ.get("ANDROID_IMAGE_DIR", os.path.join(LOCALAPPDATA, r"Android\Sdk\system-images\android-34\google_apis\arm64-v8a"))
+WORK_DIR = os.environ.get("SDK_WORK_DIR", os.path.join(ROOT_DIR, "work_sdk"))
 RAMDISK_SRC = os.path.join(IMG_DIR, "ramdisk.img")
 RAMDISK_DST = os.path.join(WORK_DIR, "ramdisk_bc.img")
+os.makedirs(WORK_DIR, exist_ok=True)
 
 keys = [
     "androidboot.hardware=ranchu",

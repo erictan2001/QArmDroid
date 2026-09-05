@@ -49,32 +49,50 @@ fn silent_command(program: impl AsRef<std::ffi::OsStr>) -> Command {
     cmd
 }
 
-/// Locate adb executable: prefer runtime scrcpy/adb.exe, repo tools/scrcpy/adb.exe, or system PATH
+/// Locate adb executable: prefer bundled platform-tools/scrcpy adb.exe, installer resources, repo tools, or system PATH
 fn get_adb_path() -> PathBuf {
-    if Path::new(r"C:\platform-tools\adb.exe").exists() {
-        return PathBuf::from(r"C:\platform-tools\adb.exe");
-    }
-    let candidates = vec![
+    let mut candidates = vec![
+        runtime_root().join("platform-tools").join("adb.exe"),
         runtime_root().join("scrcpy").join("adb.exe"),
+        runtime_root().join("tools").join("platform-tools").join("adb.exe"),
         runtime_root().join("tools").join("scrcpy").join("adb.exe"),
+        runtime_root().join("tools").join("adb.exe"),
     ];
+    if let Some(res) = install_resources() {
+        candidates.push(res.join("platform-tools").join("adb.exe"));
+        candidates.push(res.join("scrcpy").join("adb.exe"));
+        candidates.push(res.join("tools").join("platform-tools").join("adb.exe"));
+        candidates.push(res.join("tools").join("scrcpy").join("adb.exe"));
+        candidates.push(res.join("tools").join("adb.exe"));
+    }
+    if let Ok(repo_root) = find_repo_root() {
+        candidates.push(repo_root.join("tools").join("platform-tools").join("adb.exe"));
+        candidates.push(repo_root.join("tools").join("scrcpy").join("adb.exe"));
+        candidates.push(repo_root.join("platform-tools").join("adb.exe"));
+    }
+    if let Ok(localappdata) = std::env::var("LOCALAPPDATA") {
+        candidates.push(PathBuf::from(localappdata).join("Android").join("Sdk").join("platform-tools").join("adb.exe"));
+    }
+    let sys_drive = std::env::var("SystemDrive").unwrap_or_else(|_| "C:".to_string());
+    candidates.push(PathBuf::from(&sys_drive).join("platform-tools").join("adb.exe"));
+    candidates.push(PathBuf::from(&sys_drive).join("Android").join("platform-tools").join("adb.exe"));
+
     for p in candidates {
         if p.exists() {
             return p;
         }
     }
-    if let Ok(repo_root) = find_repo_root() {
-        let scrcpy_adb = repo_root.join("tools").join("scrcpy").join("adb.exe");
-        if scrcpy_adb.exists() {
-            return scrcpy_adb;
+
+    // Check system PATH
+    if let Ok(path_var) = std::env::var("PATH") {
+        for dir in std::env::split_paths(&path_var) {
+            let p = dir.join("adb.exe");
+            if p.exists() {
+                return p;
+            }
         }
     }
-    if let Some(res) = install_resources() {
-        let scrcpy_adb = res.join("scrcpy").join("adb.exe");
-        if scrcpy_adb.exists() {
-            return scrcpy_adb;
-        }
-    }
+
     PathBuf::from("adb")
 }
 

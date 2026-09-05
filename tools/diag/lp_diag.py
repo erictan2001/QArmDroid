@@ -1,8 +1,17 @@
 #!/usr/bin/env python3
 """Diagnostic: parse android LP metadata in super_raw.img, dump tables."""
-import struct, sys
+import os, struct, sys
 
-P = r"C:\Users\erict\OneDrive\Desktop\Arm64AndroidEmulator\aosp_cf_arm64_only_phone-img\work\m0\super_raw.img"
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+ROOT_DIR = os.path.dirname(os.path.dirname(SCRIPT_DIR))
+candidates = [
+    sys.argv[1] if len(sys.argv) > 1 else "",
+    os.path.join(ROOT_DIR, "aosp_cf_arm64_only_phone-img", "work", "m0", "super_raw.img"),
+    os.path.join(os.environ.get("LOCALAPPDATA", ""), "QArmDroid", "image", "super_raw.img"),
+]
+P = next((c for c in candidates if c and os.path.exists(c)), candidates[1])
+if not os.path.exists(P):
+    sys.exit(f"super_raw.img not found at {P}. Provide path as argument.")
 data = open(P, "rb").read(400*1024)
 
 H = 12288

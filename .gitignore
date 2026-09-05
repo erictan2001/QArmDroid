@@ -84,5 +84,6 @@ tools/qemu-gfxstream/ninja-test/
 tools/qemu-gfxstream/_ctxinit_debug/
 tools/qemu-gfxstream/tools/
 tools/scrcpy/
+tools/platform-tools/
 work_sdk/
 research/artifacts/

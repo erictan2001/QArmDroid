@@ -7,9 +7,25 @@ sandbox, unlike ninja.exe whose CreateProcess hangs).
 Usage:
     python pyninja.py <build_dir> <target> [--jobs N] [--dry] [--log PATH]
 """
-import subprocess, sys, os, re, time
+import subprocess, sys, os, re, time, shutil
 
-NINJA = r"C:\msys64\clangarm64\bin\ninja.exe"
+def find_ninja():
+    which = shutil.which("ninja")
+    if which:
+        return which
+    candidates = [
+        os.environ.get("MSYS2_ROOT", ""),
+        r"C:\msys64",
+        os.path.join(os.environ.get("SystemDrive", "C:"), "msys64")
+    ]
+    for c in candidates:
+        if c:
+            p = os.path.join(c, "clangarm64", "bin", "ninja.exe")
+            if os.path.isfile(p):
+                return p
+    return "ninja"
+
+NINJA = find_ninja()
 
 def get_commands(build_dir, target):
     p = subprocess.run(

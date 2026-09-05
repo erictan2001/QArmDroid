@@ -1,8 +1,21 @@
-﻿import subprocess
+import os
+import shutil
+import subprocess
 import time
 
+candidates = [
+    shutil.which("adb"),
+    os.path.join(os.environ.get("LOCALAPPDATA", ""), "QArmDroid", "platform-tools", "adb.exe"),
+    os.path.join(os.environ.get("LOCALAPPDATA", ""), "QArmDroid", "scrcpy", "adb.exe"),
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "platform-tools", "adb.exe"),
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "scrcpy", "adb.exe"),
+    os.path.join(os.environ.get("SystemDrive", "C:"), "platform-tools", "adb.exe"),
+    "adb",
+]
+adb_bin = next((c for c in candidates if c and os.path.exists(c)), "adb")
+
 def adb(cmd):
-    return subprocess.run([r"C:\platform-tools\adb.exe", "-s", "127.0.0.1:5555"] + cmd.split(), capture_output=True, text=True)
+    return subprocess.run([adb_bin, "-s", "127.0.0.1:5555"] + cmd.split(), capture_output=True, text=True)
 
 print("1. Unlocking device...")
 adb("shell input keyevent 82")

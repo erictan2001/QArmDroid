@@ -1,4 +1,10 @@
-﻿f = open(r'C:\Users\erict\AppData\Local\Android\Sdk\system-images\android-34\google_apis\arm64-v8a\system.img', 'rb')
+import os, sys
+
+default_p = os.path.join(os.environ.get("LOCALAPPDATA", ""), r"Android\Sdk\system-images\android-34\google_apis\arm64-v8a\system.img")
+p = sys.argv[1] if len(sys.argv) > 1 else default_p
+if not os.path.exists(p):
+    sys.exit(f"Image not found at {p}. Pass path as argument.")
+f = open(p, 'rb')
 f.seek(1024)
 for i in range(128):
     entry = f.read(128)

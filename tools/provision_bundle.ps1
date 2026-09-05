@@ -114,8 +114,9 @@ $qemuDst   = Join-Path $RuntimeRoot "qemu"
 $imgDst    = Join-Path $RuntimeRoot "image"
 $toolsDst  = Join-Path $RuntimeRoot "tools"
 $scrcpyDst = Join-Path $RuntimeRoot "scrcpy"
+$ptDst     = Join-Path $RuntimeRoot "platform-tools"
 
-foreach ($d in @($qemuDst, $imgDst, $toolsDst, $scrcpyDst)) { New-Item -ItemType Directory -Force -Path $d | Out-Null }
+foreach ($d in @($qemuDst, $imgDst, $toolsDst, $scrcpyDst, $ptDst)) { New-Item -ItemType Directory -Force -Path $d | Out-Null }
 
 $imageInputs = @("kernel","initrd.img","boot.img","init_boot.img","vendor_boot.img",
                  "vbmeta.img","vbmeta_system.img","vbmeta_system_dlkm.img",
@@ -140,7 +141,7 @@ if ($needSync) {
     }
 
     Emit-Progress 30 "Copying Scrcpy mirror & ADB tools"
-    Write-Host "== syncing Scrcpy ==" -ForegroundColor Cyan
+    Write-Host "== syncing Scrcpy & ADB ==" -ForegroundColor Cyan
     $scrcpySrc = Join-Path $InstallRoot "scrcpy"
     if (-not (Test-Path $scrcpySrc)) {
         $scrcpySrc = Join-Path $InstallRoot "tools\scrcpy"
@@ -154,6 +155,29 @@ if ($needSync) {
         $toolsScrcpy = Join-Path $toolsDst "scrcpy"
         New-Item -ItemType Directory -Force -Path $toolsScrcpy | Out-Null
         Copy-Item (Join-Path $scrcpySrc "*") $toolsScrcpy -Recurse -Force
+    }
+
+    # Platform-tools (ADB standalone)
+    $ptSrc = Join-Path $InstallRoot "platform-tools"
+    if (-not (Test-Path $ptSrc)) {
+        $ptSrc = Join-Path $InstallRoot "tools\platform-tools"
+    }
+    if (-not (Test-Path $ptSrc)) {
+        $ptSrc = Join-Path $PSScriptRoot "platform-tools"
+    }
+    if (Test-Path $ptSrc) {
+        Copy-Item (Join-Path $ptSrc "*") $ptDst -Recurse -Force
+        $toolsPt = Join-Path $toolsDst "platform-tools"
+        New-Item -ItemType Directory -Force -Path $toolsPt | Out-Null
+        Copy-Item (Join-Path $ptSrc "*") $toolsPt -Recurse -Force
+    } elseif (Test-Path (Join-Path $scrcpyDst "adb.exe")) {
+        # Fallback: extract adb binaries from scrcpy into platform-tools
+        foreach ($f in @("adb.exe", "AdbWinApi.dll", "AdbWinUsbApi.dll")) {
+            $sf = Join-Path $scrcpyDst $f
+            if (Test-Path $sf) {
+                Copy-Item $sf (Join-Path $ptDst $f) -Force
+            }
+        }
     }
 
     Emit-Progress 40 "Copying Android image inputs"

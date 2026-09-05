@@ -72,6 +72,9 @@ if ($Density -eq 0) {
 $RepoRoot = (Resolve-Path "$PSScriptRoot\..").Path
 $GfxDir   = Join-Path $RepoRoot "tools\qemu-gfxstream"
 
+$msysCands = @($env:MSYS2_ROOT, "C:\msys64", "$env:SystemDrive\msys64")
+$msysBin = ($msysCands | Where-Object { $_ -and (Test-Path (Join-Path $_ "clangarm64\bin")) } | ForEach-Object { Join-Path $_ "clangarm64\bin" } | Select-Object -First 1)
+
 if ($BundleRoot) {
     # Installed (bundled) layout:
     #   <bundle>\qemu\qemu-system-aarch64.exe + runtime DLLs beside it
@@ -87,11 +90,24 @@ if ($BundleRoot) {
             $QemuPath = $bundleQemu
         }
     }
-    $pathAdditions = @($QemuDir, "C:\msys64\clangarm64\bin")
+    $pathAdditions = @($QemuDir)
+    if ($msysBin) { $pathAdditions += $msysBin }
+    $pathAdditions += @(
+        (Join-Path $BundleRoot "platform-tools"),
+        (Join-Path $BundleRoot "scrcpy"),
+        (Join-Path $env:LOCALAPPDATA "QArmDroid\platform-tools"),
+        (Join-Path $env:LOCALAPPDATA "QArmDroid\scrcpy")
+    )
 }
 else {
     if (-not $QemuPath) { $QemuPath = Join-Path $GfxDir "qemu\build\qemu-system-aarch64.exe" }
-    $pathAdditions = @("C:\msys64\clangarm64\bin")
+    $pathAdditions = @(
+        (Join-Path $RepoRoot "tools\platform-tools"),
+        (Join-Path $RepoRoot "tools\scrcpy"),
+        (Join-Path $env:LOCALAPPDATA "QArmDroid\platform-tools"),
+        (Join-Path $env:LOCALAPPDATA "QArmDroid\scrcpy")
+    )
+    if ($msysBin) { $pathAdditions += $msysBin }
 }
 
 if ($GpuMode -eq "gfxstream" -and -not $BundleRoot) {
@@ -266,7 +282,10 @@ function Build-QemuArgs {
     # to the msys2 share when running from the dev repo.
     $fwDir = Join-Path (Split-Path $QemuPath -Parent) "share\qemu"
     if (-not (Test-Path (Join-Path $fwDir "efi-virtio.rom"))) {
-        $fwDir = "C:\msys64\clangarm64\share\qemu"
+        $fwCandidate = ($msysCands | Where-Object { $_ -and (Test-Path (Join-Path $_ "clangarm64\share\qemu\efi-virtio.rom")) } | ForEach-Object { Join-Path $_ "clangarm64\share\qemu" } | Select-Object -First 1)
+        if ($fwCandidate) {
+            $fwDir = $fwCandidate
+        }
     }
     $arr = @(
         "-accel", "whpx",
@@ -315,12 +334,23 @@ if ($PrintArgs) {
 # --------------------------------------------------------- stale process --- #
 Get-Process -Name "qemu-system-aarch64", "scrcpy" -ErrorAction SilentlyContinue |
     Stop-Process -Force -ErrorAction SilentlyContinue
-$Adb = if (Test-Path "C:\platform-tools\adb.exe") {
-    "C:\platform-tools\adb.exe"
-} elseif (Get-Command adb -ErrorAction SilentlyContinue) {
-    (Get-Command adb).Source
+$sysDrive = if ($env:SystemDrive) { $env:SystemDrive } else { "C:" }
+$Adb = if (Test-Path "$PSScriptRoot\platform-tools\adb.exe") {
+    "$PSScriptRoot\platform-tools\adb.exe"
 } elseif (Test-Path "$PSScriptRoot\scrcpy\adb.exe") {
     "$PSScriptRoot\scrcpy\adb.exe"
+} elseif ($BundleRoot -and (Test-Path "$BundleRoot\platform-tools\adb.exe")) {
+    "$BundleRoot\platform-tools\adb.exe"
+} elseif ($BundleRoot -and (Test-Path "$BundleRoot\scrcpy\adb.exe")) {
+    "$BundleRoot\scrcpy\adb.exe"
+} elseif (Test-Path (Join-Path $env:LOCALAPPDATA "QArmDroid\platform-tools\adb.exe")) {
+    Join-Path $env:LOCALAPPDATA "QArmDroid\platform-tools\adb.exe"
+} elseif (Test-Path (Join-Path $env:LOCALAPPDATA "QArmDroid\scrcpy\adb.exe")) {
+    Join-Path $env:LOCALAPPDATA "QArmDroid\scrcpy\adb.exe"
+} elseif (Get-Command adb -ErrorAction SilentlyContinue) {
+    (Get-Command adb).Source
+} elseif (Test-Path "$sysDrive\platform-tools\adb.exe") {
+    "$sysDrive\platform-tools\adb.exe"
 } else {
     "adb"
 }

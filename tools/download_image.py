@@ -1,11 +1,12 @@
-﻿import urllib.request
+import urllib.request
 import zipfile
 import os
 import sys
 
 URL = "https://dl.google.com/android/repository/sys-img/google_apis/arm64-v8a-34_r14.zip"
-DEST_DIR = r"C:\Users\erict\AppData\Local\Android\Sdk\system-images\android-34\google_apis\arm64-v8a"
-ZIP_PATH = r"C:\Users\erict\AppData\Local\Android\Sdk\arm64-v8a-34_r14.zip"
+LOCALAPPDATA = os.environ.get("LOCALAPPDATA", os.path.expanduser("~\\AppData\\Local"))
+DEST_DIR = os.environ.get("ANDROID_IMAGE_DIR", os.path.join(LOCALAPPDATA, r"Android\Sdk\system-images\android-34\google_apis\arm64-v8a"))
+ZIP_PATH = os.environ.get("ANDROID_IMAGE_ZIP", os.path.join(LOCALAPPDATA, r"Android\Sdk\arm64-v8a-34_r14.zip"))
 
 os.makedirs(os.path.dirname(DEST_DIR), exist_ok=True)
 

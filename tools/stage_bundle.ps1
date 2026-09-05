@@ -34,7 +34,7 @@ $ImgDir   = Join-Path $RepoRoot "aosp_cf_arm64_only_phone-img"
 $M0Dir    = Join-Path $ImgDir "work\m0"
 $QemuBuild= Join-Path $RepoRoot "tools\qemu-gfxstream\qemu\build"
 
-foreach ($d in @("$ResDir\qemu", "$ResDir\image", "$ResDir\tools", "$ResDir\scrcpy")) {
+foreach ($d in @("$ResDir\qemu", "$ResDir\image", "$ResDir\tools", "$ResDir\scrcpy", "$ResDir\platform-tools")) {
     New-Item -ItemType Directory -Force -Path $d | Out-Null
 }
 
@@ -45,6 +45,33 @@ if (Test-Path $scrcpySrc) {
     Copy-Item (Join-Path $scrcpySrc "*") (Join-Path $ResDir "scrcpy") -Recurse -Force
 } else {
     Write-Warning "tools\scrcpy not found at $scrcpySrc"
+}
+
+# -------------------------------------------------------- platform-tools (ADB) ---- #
+Write-Host "== staging ADB platform-tools ==" -ForegroundColor Cyan
+$ptDst = Join-Path $ResDir "platform-tools"
+$adbSrc = $null
+$sysDrive = if ($env:SystemDrive) { $env:SystemDrive } else { "C:" }
+if (Test-Path (Join-Path $RepoRoot "tools\platform-tools\adb.exe")) {
+    $adbSrc = Join-Path $RepoRoot "tools\platform-tools"
+} elseif (Test-Path (Join-Path $RepoRoot "tools\scrcpy\adb.exe")) {
+    $adbSrc = Join-Path $RepoRoot "tools\scrcpy"
+} elseif (Test-Path "$sysDrive\platform-tools\adb.exe") {
+    $adbSrc = "$sysDrive\platform-tools"
+} elseif (Get-Command adb -ErrorAction SilentlyContinue) {
+    $adbSrc = Split-Path (Get-Command adb).Source -Parent
+}
+
+if ($adbSrc) {
+    foreach ($f in @("adb.exe", "AdbWinApi.dll", "AdbWinUsbApi.dll")) {
+        $srcFile = Join-Path $adbSrc $f
+        if (Test-Path $srcFile) {
+            Copy-Item $srcFile (Join-Path $ptDst $f) -Force
+        }
+    }
+    Write-Host "  staged ADB from $adbSrc" -ForegroundColor DarkGray
+} else {
+    Write-Warning "ADB not found to stage into platform-tools"
 }
 
 # ---------------------------------------------------------------- QEMU ------ #
@@ -58,8 +85,13 @@ if (-not $NoQemu) {
     # SDL2.dll (display window) and libslirp-0.dll (user-mode networking) are
     # imported by qemu-system-aarch64.exe but absent from the build dir; without
     # them the bundled QEMU fails with STATUS_DLL_NOT_FOUND at launch.
+    $msysCandidates = @($env:MSYS2_ROOT, "C:\msys64", "$env:SystemDrive\msys64")
+    $msysRoot = ($msysCandidates | Where-Object { $_ -and (Test-Path (Join-Path $_ "clangarm64\bin")) } | Select-Object -First 1)
+    $msysBin = if ($msysRoot) { Join-Path $msysRoot "clangarm64\bin" } else { "C:\msys64\clangarm64\bin" }
+    $fwSrc = if ($msysRoot) { Join-Path $msysRoot "clangarm64\share\qemu" } else { "C:\msys64\clangarm64\share\qemu" }
+
     foreach ($dll in @("libpixman-1-0.dll","libzstd-1.dll","SDL2.dll","libslirp-0.dll")) {
-        $s = Join-Path "C:\msys64\clangarm64\bin" $dll
+        $s = Join-Path $msysBin $dll
         if (Test-Path $s) { Copy-Item $s (Join-Path $ResDir "qemu") -Force }
     }
 
@@ -69,7 +101,6 @@ if (-not $NoQemu) {
     # not find keymap file for language 'en-us'"). Ship the whole data dir
     # (ROMs + keymaps + dtb + firmware) under qemu\share\qemu and point -L at
     # it in launch.ps1.
-    $fwSrc = "C:\msys64\clangarm64\share\qemu"
     $fwDst = Join-Path $ResDir "qemu\share\qemu"
     New-Item -ItemType Directory -Force -Path $fwDst | Out-Null
     if (Test-Path $fwSrc) {

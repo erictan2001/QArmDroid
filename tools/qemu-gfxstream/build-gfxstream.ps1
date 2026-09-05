@@ -1,7 +1,9 @@
-﻿. "$env:QGS\session.ps1"
-$env:CC = "C:\msys64\clangarm64\bin\clang.exe"
-$env:CXX = "C:\msys64\clangarm64\bin\clang++.exe"
-cd "$env:QGS\gfxstream"
+$bk = if ($env:QGS) { $env:QGS } else { $PSScriptRoot }
+. "$bk\session.ps1"
+$env:CC = Join-Path $clangBin "clang.exe"
+$env:CXX = Join-Path $clangBin "clang++.exe"
+Push-Location "$bk\gfxstream"
 meson setup build-host "-Ddecoders=gles,vulkan,composer" "-Dgfxstream-build=host" "-Dplatforms=windows" "-Dlog-level=error" --buildtype=release
-if ($LASTEXITCODE -ne 0) { exit 1 }
+if ($LASTEXITCODE -ne 0) { Pop-Location; exit 1 }
 ninja -C build-host
+Pop-Location

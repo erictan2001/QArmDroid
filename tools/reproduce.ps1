@@ -131,9 +131,24 @@ $launch = Join-Path $RepoRoot "tools\launch.ps1"
 & $launch -DisplayMode sdl -GpuMode basic -Memory $Memory -Cores $Cores
 
 # ------------------------------------------------------- boot watchdog ---- #
-Write-Host "== [6/6] waiting for boot (ADB) ==" -ForegroundColor Cyan
-$Adb = "C:\platform-tools\adb.exe"
-if ($envJson -and $envJson.adb) { $Adb = $envJson.adb }
+$sysDrive = if ($env:SystemDrive) { $env:SystemDrive } else { "C:" }
+$Adb = if ($envJson -and $envJson.adb -and (Test-Path $envJson.adb)) {
+    $envJson.adb
+} elseif (Test-Path (Join-Path $env:LOCALAPPDATA "QArmDroid\platform-tools\adb.exe")) {
+    Join-Path $env:LOCALAPPDATA "QArmDroid\platform-tools\adb.exe"
+} elseif (Test-Path (Join-Path $env:LOCALAPPDATA "QArmDroid\scrcpy\adb.exe")) {
+    Join-Path $env:LOCALAPPDATA "QArmDroid\scrcpy\adb.exe"
+} elseif (Test-Path "$PSScriptRoot\platform-tools\adb.exe") {
+    "$PSScriptRoot\platform-tools\adb.exe"
+} elseif (Test-Path "$PSScriptRoot\scrcpy\adb.exe") {
+    "$PSScriptRoot\scrcpy\adb.exe"
+} elseif (Get-Command adb -ErrorAction SilentlyContinue) {
+    (Get-Command adb).Source
+} elseif (Test-Path "$sysDrive\platform-tools\adb.exe") {
+    "$sysDrive\platform-tools\adb.exe"
+} else {
+    "adb"
+}
 $deadline = (Get-Date).AddMinutes(10)
 $booted = $false
 & $Adb connect 127.0.0.1:5555 2>$null | Out-Null

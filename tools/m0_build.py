@@ -18,7 +18,7 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(SCRIPT_DIR)
 IMG = os.path.join(ROOT, "aosp_cf_arm64_only_phone-img")
 WORK = os.path.join(IMG, "work", "m0")
-MSYS_BIN = r"C:\msys64\clangarm64\bin"
+MSYS_BIN = os.environ.get("MSYS_BIN", r"C:\msys64\clangarm64\bin" if os.path.exists(r"C:\msys64\clangarm64\bin") else "")
 
 # Pure-Python image tools (lz4 / sparse / cpio) — no external binaries needed.
 if SCRIPT_DIR not in sys.path:
@@ -593,7 +593,13 @@ def main():
             if os.path.exists(p):
                 print(f"    {p}  ({os.path.getsize(p)} bytes)")
         print("\nQEMU launch line:")
-        qemu = os.path.join(MSYS_BIN, "qemu-system-aarch64.exe")
+        qemu_bundle = os.path.join(BUNDLE, "qemu", "qemu-system-aarch64.exe") if BUNDLE else ""
+        if qemu_bundle and os.path.exists(qemu_bundle):
+            qemu = qemu_bundle
+        elif MSYS_BIN and os.path.exists(os.path.join(MSYS_BIN, "qemu-system-aarch64.exe")):
+            qemu = os.path.join(MSYS_BIN, "qemu-system-aarch64.exe")
+        else:
+            qemu = "qemu-system-aarch64.exe"
         kernel = os.path.join(IMG, "out", "kernel")
         print(f'  "{qemu}" -accel whpx -cpu host -machine virt,gic-version=3,highmem=on -m 6G -smp 6 '
               f'-kernel "{kernel}" -initrd "{WORK}\\initrd.img" '

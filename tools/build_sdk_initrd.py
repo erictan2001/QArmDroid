@@ -1,16 +1,25 @@
-﻿import os
+import os
 import struct
 import io
 import subprocess
 
-IMG_DIR = r"C:\Users\erict\AppData\Local\Android\Sdk\system-images\android-34\google_apis\arm64-v8a"
-WORK_DIR = r"C:\Users\erict\OneDrive\Desktop\Arm64AndroidEmulator\work_sdk"
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+ROOT_DIR = os.path.dirname(SCRIPT_DIR)
+LOCALAPPDATA = os.environ.get("LOCALAPPDATA", os.path.expanduser("~\\AppData\\Local"))
+
+IMG_DIR = os.environ.get("ANDROID_IMAGE_DIR", os.path.join(LOCALAPPDATA, r"Android\Sdk\system-images\android-34\google_apis\arm64-v8a"))
+WORK_DIR = os.environ.get("SDK_WORK_DIR", os.path.join(ROOT_DIR, "work_sdk"))
 RAMDISK_SRC = os.path.join(IMG_DIR, "ramdisk.img")
 OUT_INITRD = os.path.join(WORK_DIR, "initrd_sdk.img")
 
 # 1. Decompress ramdisk.img
-lz4_bin = r"C:\msys64\clangarm64\bin\lz4.exe"
+lz4_candidates = [
+    r"C:\msys64\clangarm64\bin\lz4.exe",
+    "lz4.exe",
+]
+lz4_bin = next((c for c in lz4_candidates if os.path.exists(c)), "lz4")
 cpio_raw = os.path.join(WORK_DIR, "ramdisk_raw.cpio")
+os.makedirs(WORK_DIR, exist_ok=True)
 subprocess.run([lz4_bin, "-d", "-f", RAMDISK_SRC, cpio_raw], check=True)
 
 raw_data = open(cpio_raw, "rb").read()

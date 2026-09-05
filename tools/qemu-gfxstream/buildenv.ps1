@@ -1,9 +1,11 @@
 # Build environment for QEMU gfxstream build under busybox sh.
 # Source this with: . .\buildenv.ps1
-$root = "C:\Users\erict\OneDrive\Desktop\Arm64AndroidEmulator\tools\qemu-gfxstream"
+$root = $PSScriptRoot
 $env:BB = "$root\bin"
-$env:CLANG = "C:\msys64\clangarm64\bin"
-$env:CARGOBIN = "C:\Users\erict\.cargo\bin"
+$msysCands = @($env:MSYS2_ROOT, "C:\msys64", "$env:SystemDrive\msys64")
+$msysRoot = ($msysCands | Where-Object { $_ -and (Test-Path (Join-Path $_ "clangarm64\bin")) } | Select-Object -First 1)
+$env:CLANG = if ($msysRoot) { Join-Path $msysRoot "clangarm64\bin" } else { "C:\msys64\clangarm64\bin" }
+$env:CARGOBIN = Join-Path $env:USERPROFILE ".cargo\bin"
 $env:PATH = "$env:BB;$env:CLANG;$env:CARGOBIN;C:\Windows\System32;C:\Windows;$env:PATH"
 
 # Tell pkg-config / build tools where to find msys prefix

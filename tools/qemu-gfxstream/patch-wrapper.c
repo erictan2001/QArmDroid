@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <process.h>
+#include <windows.h>
 
 int main(int argc, char **argv) {
     for (int i = 1; i < argc; i++) {
@@ -13,7 +14,16 @@ int main(int argc, char **argv) {
         }
     }
     /* Forward to busybox, whose multi-call binary dispatches on argv[0]. */
-    const char *bb = "C:\\Users\\erict\\OneDrive\\Desktop\\Arm64AndroidEmulator\\tools\\qemu-gfxstream\\tools\\busybox64.exe";
+    char bb[MAX_PATH];
+    if (GetEnvironmentVariableA("BUSYBOX_EXE", bb, MAX_PATH) == 0) {
+        if (GetModuleFileNameA(NULL, bb, MAX_PATH)) {
+            char *p = strrchr(bb, '\\');
+            if (p) strcpy(p + 1, "busybox64.exe");
+            else strcpy(bb, "busybox64.exe");
+        } else {
+            strcpy(bb, "busybox64.exe");
+        }
+    }
     char **nargv = (char **)malloc((argc + 1) * sizeof(char *));
     nargv[0] = (char *)"patch";
     for (int i = 1; i < argc; i++) nargv[i] = argv[i];

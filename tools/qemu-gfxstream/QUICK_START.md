@@ -31,7 +31,7 @@ tools\launch.ps1 -DisplayMode sdl -GpuMode basic
 ## Boot (headless, pairs with scrcpy)
 
 ```powershell
-cd C:\Users\erict\OneDrive\Desktop\Arm64AndroidEmulator
+cd <clone>\QArmDroid
 tools\launch.ps1                 # boots headless; watchdog enforces 1280x800
 adb connect 127.0.0.1:5555       # after ~2-4 min, sys.boot_completed=1
 ```

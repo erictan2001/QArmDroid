@@ -44,8 +44,17 @@ param(
 # PS 5.1 treats ANY native-command stderr as a terminating error under
 # EAP=Stop (cargo status lines, adb push progress). Use Continue and rely
 # on explicit checks instead.
-$ErrorActionPreference = "Continue"
-$adb = "C:\platform-tools\adb.exe"
+$sysDrive = if ($env:SystemDrive) { $env:SystemDrive } else { "C:" }
+$adbCandidates = @(
+    (Join-Path $env:LOCALAPPDATA "QArmDroid\platform-tools\adb.exe"),
+    (Join-Path $env:LOCALAPPDATA "QArmDroid\scrcpy\adb.exe"),
+    (Join-Path $PSScriptRoot "platform-tools\adb.exe"),
+    (Join-Path $PSScriptRoot "scrcpy\adb.exe"),
+    (Get-Command adb -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source -ErrorAction SilentlyContinue),
+    (Join-Path $sysDrive "platform-tools\adb.exe")
+)
+$adb = ($adbCandidates | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1)
+if (-not $adb) { $adb = "adb" }
 $target = "127.0.0.1:5555"
 $repoRoot = (Resolve-Path "$PSScriptRoot\..").Path
 

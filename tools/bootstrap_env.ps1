@@ -56,11 +56,16 @@ function Find-Python {
 
 function Find-Adb {
     if ($Adb) { return $Adb }
+    $sysDrive = if ($env:SystemDrive) { $env:SystemDrive } else { "C:" }
     foreach ($cand in @(
-        "C:\platform-tools\adb.exe",
+        "$env:LOCALAPPDATA\QArmDroid\platform-tools\adb.exe",
+        "$env:LOCALAPPDATA\QArmDroid\scrcpy\adb.exe",
+        "$PSScriptRoot\platform-tools\adb.exe",
+        "$PSScriptRoot\scrcpy\adb.exe",
         "$env:LOCALAPPDATA\Android\Sdk\platform-tools\adb.exe",
-        "C:\Android\platform-tools\adb.exe"
-    )) { if (Test-Path $cand) { return $cand } }
+        "$sysDrive\platform-tools\adb.exe",
+        "$sysDrive\Android\platform-tools\adb.exe"
+    )) { if ($cand -and (Test-Path $cand)) { return $cand } }
     $cmd = Get-Command "adb" -ErrorAction SilentlyContinue
     if ($cmd) { return $cmd.Source }
     return ""
@@ -71,11 +76,14 @@ function Find-Qemu {
     # Single source of truth: repo-local custom build
     $custom = Join-Path $RepoRoot "tools\qemu-gfxstream\qemu\build\qemu-system-aarch64.exe"
     if (Test-Path $custom) { return $custom }
+    $bundled = Join-Path $env:LOCALAPPDATA "QArmDroid\qemu\qemu-system-aarch64.exe"
+    if (Test-Path $bundled) { return $bundled }
     return ""
 }
 
 function Find-MsysBin {
-    if (Test-Path "C:\msys64\clangarm64\bin") { return "C:\msys64\clangarm64\bin" }
+    $cands = @("C:\msys64\clangarm64\bin", "$env:SystemDrive\msys64\clangarm64\bin")
+    foreach ($c in $cands) { if (Test-Path $c) { return $c } }
     return ""
 }
 

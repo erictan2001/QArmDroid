@@ -6,8 +6,13 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-$QemuBin = "C:\msys64\clangarm64\bin\qemu-system-aarch64.exe"
-$ImgDir = "C:\Users\erict\AppData\Local\Android\Sdk\system-images\android-34\google_apis\arm64-v8a"
+$qemuCandidates = @(
+    (Join-Path $env:LOCALAPPDATA "QArmDroid\qemu\qemu-system-aarch64.exe"),
+    "C:\msys64\clangarm64\bin\qemu-system-aarch64.exe"
+)
+$QemuBin = ($qemuCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1)
+if (-not $QemuBin) { $QemuBin = "qemu-system-aarch64.exe" }
+$ImgDir = Join-Path $env:LOCALAPPDATA "Android\Sdk\system-images\android-34\google_apis\arm64-v8a"
 $WorkDir = Join-Path $PSScriptRoot "..\work_sdk"
 if (-not (Test-Path $WorkDir)) { New-Item -ItemType Directory -Path $WorkDir | Out-Null }
 

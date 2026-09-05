@@ -52,11 +52,28 @@ jobs:
             "src-tauri/resources/image",
             "src-tauri/resources/tools",
             "src-tauri/resources/python",
-            "src-tauri/resources/scrcpy"
+            "src-tauri/resources/scrcpy",
+            "src-tauri/resources/platform-tools"
           )
           foreach ($d in $resDirs) {
             New-Item -ItemType Directory -Force -Path $d | Out-Null
             New-Item -ItemType File -Force -Path (Join-Path $d ".gitkeep") | Out-Null
+          }
+
+          # Ensure ADB is bundled inside platform-tools and scrcpy
+          $ptDst = "src-tauri/resources/platform-tools"
+          if (-not (Test-Path "$ptDst/adb.exe")) {
+            Write-Host "Downloading Android SDK platform-tools..."
+            Invoke-WebRequest -Uri "https://dl.google.com/android/repository/platform-tools-latest-windows.zip" -OutFile "platform-tools.zip"
+            Expand-Archive -Path "platform-tools.zip" -DestinationPath "pt-temp" -Force
+            Copy-Item "pt-temp/platform-tools/adb.exe" "$ptDst/" -Force
+            Copy-Item "pt-temp/platform-tools/AdbWinApi.dll" "$ptDst/" -Force
+            Copy-Item "pt-temp/platform-tools/AdbWinUsbApi.dll" "$ptDst/" -Force
+            # Also ensure scrcpy directory has adb for backward compat
+            Copy-Item "pt-temp/platform-tools/adb.exe" "src-tauri/resources/scrcpy/" -Force -ErrorAction SilentlyContinue
+            Copy-Item "pt-temp/platform-tools/AdbWinApi.dll" "src-tauri/resources/scrcpy/" -Force -ErrorAction SilentlyContinue
+            Copy-Item "pt-temp/platform-tools/AdbWinUsbApi.dll" "src-tauri/resources/scrcpy/" -Force -ErrorAction SilentlyContinue
+            Remove-Item -Recurse -Force "pt-temp", "platform-tools.zip" -ErrorAction SilentlyContinue
           }
 
           # Copy tools scripts into resources
