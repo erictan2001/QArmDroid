@@ -1,0 +1,96 @@
+name: Build & Package Application
+
+on:
+  push:
+    branches: [ main ]
+    tags:
+      - 'v*'
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+    inputs:
+      publish_release:
+        description: 'Publish as a GitHub Release'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build & Package (Windows)
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: 'src-tauri -> target'
+
+      - name: Install Node dependencies
+        run: npm ci
+
+      - name: Prepare bundle resources
+        shell: pwsh
+        run: |
+          # Ensure bundle resource directories defined in tauri.conf.json exist
+          $resDirs = @(
+            "src-tauri/resources/qemu",
+            "src-tauri/resources/image",
+            "src-tauri/resources/tools",
+            "src-tauri/resources/python",
+            "src-tauri/resources/scrcpy"
+          )
+          foreach ($d in $resDirs) {
+            New-Item -ItemType Directory -Force -Path $d | Out-Null
+            New-Item -ItemType File -Force -Path (Join-Path $d ".gitkeep") | Out-Null
+          }
+
+          # Copy tools scripts into resources
+          Copy-Item tools/launch.ps1 src-tauri/resources/tools/ -Force -ErrorAction SilentlyContinue
+          Copy-Item tools/provision_bundle.ps1 src-tauri/resources/tools/ -Force -ErrorAction SilentlyContinue
+          Copy-Item tools/m0_build.py src-tauri/resources/tools/ -Force -ErrorAction SilentlyContinue
+          Copy-Item tools/imgtools.py src-tauri/resources/tools/ -Force -ErrorAction SilentlyContinue
+
+      - name: Type check and build frontend
+        run: npm run build
+
+      - name: Build Tauri application and installer
+        run: npx tauri build
+        env:
+          CI: true
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: QArmDroid-Windows-Build
+          path: |
+            src-tauri/target/release/tauri-app.exe
+            src-tauri/target/release/QArmDroid.exe
+            src-tauri/target/release/bundle/msi/*.msi
+            src-tauri/target/release/bundle/nsis/*.exe
+
+      - name: Publish to GitHub Release
+        if: (startsWith(github.ref, 'refs/tags/v') || inputs.publish_release == true)
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            src-tauri/target/release/bundle/msi/*.msi
+            src-tauri/target/release/bundle/nsis/*.exe
+            src-tauri/target/release/tauri-app.exe
+            src-tauri/target/release/QArmDroid.exe
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
