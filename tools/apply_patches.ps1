@@ -109,8 +109,8 @@ $shimsSrc  = Join-Path $PatchRoot "gfxstream\windows-shims"
 $glesHdr   = Join-Path $PatchRoot "gfxstream\gles_compat.h"
 $glesHdr2  = Join-Path $PatchRoot "gfxstream\host\gles_compat.h"   # (subpath copy)
 
-if (Test-Patched $GfxstreamDir "gles_compat" "host\frame_buffer.h") {
-    Write-Host "[gfxstream] already patched (gles_compat.h present) - skipping." -ForegroundColor DarkGray
+if (Test-Patched $GfxstreamDir "cpu_pause" "host\address_space\ring_buffer.cpp") {
+    Write-Host "[gfxstream] already patched (cpu_pause present) - skipping." -ForegroundColor DarkGray
 } else {
     Apply-GitPatch $GfxstreamDir $gfxPatch "gfxstream"
 

@@ -1,12 +1,10 @@
 [submodule "tools/qemu-gfxstream/qemu"]
 	path = tools/qemu-gfxstream/qemu
-	url = https://github.com/erictan2001/qemu.git
-	branch = qarmdroid
+	url = https://github.com/qemu/qemu.git
 	ignore = dirty
 [submodule "tools/qemu-gfxstream/gfxstream"]
 	path = tools/qemu-gfxstream/gfxstream
-	url = https://github.com/erictan2001/gfxstream.git
-	branch = qarmdroid
+	url = https://github.com/google/gfxstream.git
 	ignore = dirty
 [submodule "tools/qemu-gfxstream/rutabaga_gfx"]
 	path = tools/qemu-gfxstream/rutabaga_gfx
