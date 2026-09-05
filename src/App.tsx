@@ -18,6 +18,20 @@ interface ImageConfig {
   disk_size_gb: number;
   fs_format: string;
   runtime_root: string;
+  qemu_present: boolean;
+  qemu_path: string;
+  scrcpy_present: boolean;
+  scrcpy_path: string;
+  adb_present: boolean;
+  adb_path: string;
+  python_present: boolean;
+  kernel_present: boolean;
+  super_present: boolean;
+  disk_present: boolean;
+  cores: number;
+  memory_gb: number;
+  gpu_mode: string;
+  close_on_exit: boolean;
 }
 
 interface ProvisionProgress {
@@ -51,15 +65,50 @@ export function App() {
     visible: false,
   });
 
-  // --- Image setup / provisioning state ---
+  // --- Settings & Provisioning state ---
   const [imageConfig, setImageConfig] = useState<ImageConfig>({
     installed: false,
     provisioned: false,
     disk_size_gb: 16,
     fs_format: "ext4",
     runtime_root: "",
+    qemu_present: false,
+    qemu_path: "",
+    scrcpy_present: false,
+    scrcpy_path: "",
+    adb_present: false,
+    adb_path: "",
+    python_present: false,
+    kernel_present: false,
+    super_present: false,
+    disk_present: false,
+    cores: 6,
+    memory_gb: 6,
+    gpu_mode: "basic",
+    close_on_exit: true,
   });
-  const [showConfig, setShowConfig] = useState<boolean>(false);
+  const [showSettings, setShowSettings] = useState<boolean>(false);
+  const [savePopup, setSavePopup] = useState<{ visible: boolean; message: string; isError?: boolean }>({
+    visible: false,
+    message: "",
+  });
+  const [confirmRebuild, setConfirmRebuild] = useState<{
+    visible: boolean;
+    force: boolean;
+    targetSizeGb: number;
+    currentSizeGb: number;
+    fsFormat: string;
+    isShrink: boolean;
+    isExpand: boolean;
+  }>({
+    visible: false,
+    force: false,
+    targetSizeGb: 16,
+    currentSizeGb: 16,
+    fsFormat: "ext4",
+    isShrink: false,
+    isExpand: false,
+  });
   const [provision, setProvision] = useState<ProvisionProgress>({
     percent: 0,
     stage: "",
@@ -68,19 +117,37 @@ export function App() {
     error: false,
   });
   const [provisioning, setProvisioning] = useState<boolean>(false);
-  const [configDraft, setConfigDraft] = useState<{ sizeGb: number; fs: string }>({
+  const [settingsDraft, setSettingsDraft] = useState<{
+    sizeGb: number;
+    fs: string;
+    cores: number;
+    memoryGb: number;
+    gpuMode: string;
+    closeOnExit: boolean;
+  }>({
     sizeGb: 16,
     fs: "ext4",
+    cores: 6,
+    memoryGb: 6,
+    gpuMode: "basic",
+    closeOnExit: true,
   });
 
   const loadImageConfig = async () => {
     try {
       const cfg = await invoke<ImageConfig>("get_image_config");
       setImageConfig(cfg);
-      setConfigDraft({ sizeGb: cfg.disk_size_gb || 16, fs: cfg.fs_format || "ext4" });
-      // First run and not yet provisioned -> open the setup gate automatically.
-      if (!cfg.provisioned && !showConfig) {
-        setShowConfig(true);
+      setSettingsDraft({
+        sizeGb: cfg.disk_size_gb || 16,
+        fs: cfg.fs_format || "ext4",
+        cores: cfg.cores || 6,
+        memoryGb: cfg.memory_gb || 6,
+        gpuMode: cfg.gpu_mode || "basic",
+        closeOnExit: cfg.close_on_exit ?? true,
+      });
+      // First run and not yet provisioned -> open settings gate automatically.
+      if (!cfg.provisioned && !showSettings) {
+        setShowSettings(true);
       }
     } catch {
       // Dev repo without the command: assume provisioned to not block launch.
@@ -178,56 +245,52 @@ export function App() {
         setConnected(true);
         setLogMsg("Connected to Android display — VNC input active");
 
-        // Native listeners on the RFB canvas: noVNC calls setPointerCapture on
-        // the canvas on mousedown (rfb.js), which retargets all pointermove
-        // events to the canvas - the wrapper's React handlers never see them
-        // during a drag, so the blue circle would stick at the click point.
-        // Attaching natively to the canvas itself lets the ripple ALWAYS
-        // follow the cursor (hover + drag), independent of capture.
+        // Native listeners on the RFB canvas: handle both PointerEvent and MouseEvent
+        // so the blue touch dot always follows the cursor (hover, click, and drag).
         const canvas = screenRef.current?.querySelector("canvas");
         if (canvas && !(canvas as any).__qarm_ripple_bound) {
           (canvas as any).__qarm_ripple_bound = true;
-          const onMove = (pe: PointerEvent) => {
-            const coords = getGuestCoords(pe.clientX, pe.clientY);
+          const onMove = (e: Event) => {
+            const me = e as MouseEvent;
+            const coords = getGuestCoords(me.clientX, me.clientY);
             if (coords) {
-              // Always update position, but only show during active press
               setTouchFeedback({
                 x: coords.screenX,
                 y: coords.screenY,
-                visible: isPointerDownRef.current
+                visible: true,
               });
             }
           };
-          const onDown = (pe: PointerEvent) => {
-            const coords = getGuestCoords(pe.clientX, pe.clientY);
+          const onDown = (e: Event) => {
+            const me = e as MouseEvent;
+            const coords = getGuestCoords(me.clientX, me.clientY);
             if (coords) {
               isPointerDownRef.current = true;
               setTouchFeedback({ x: coords.screenX, y: coords.screenY, visible: true });
             }
           };
-          const onUp = () => {
+          const onUp = (e: Event) => {
             isPointerDownRef.current = false;
-            setTouchFeedback((prev) => ({ ...prev, visible: false }));
+            const me = e as MouseEvent;
+            const coords = getGuestCoords(me.clientX, me.clientY);
+            if (coords) {
+              setTouchFeedback({ x: coords.screenX, y: coords.screenY, visible: true });
+            }
           };
-          const onLeave = () => {
-            // Don't hide on leave/cancel - pointer might briefly leave during drag
-            // Only hide on explicit pointerup
-          };
-          canvas.addEventListener("pointermove", onMove);
-          canvas.addEventListener("pointerover", onMove);
-          canvas.addEventListener("pointerdown", onDown);
-          canvas.addEventListener("pointerup", onUp);
-          // Don't hide on leave/cancel - pointer might briefly leave during drag
-          // canvas.addEventListener("pointerleave", onLeave);
-          // canvas.addEventListener("pointercancel", onLeave);
-          // Store cleanup function for disconnect
+          canvas.addEventListener("pointermove", onMove, { capture: true });
+          canvas.addEventListener("mousemove", onMove, { capture: true });
+          canvas.addEventListener("pointerdown", onDown, { capture: true });
+          canvas.addEventListener("mousedown", onDown, { capture: true });
+          canvas.addEventListener("pointerup", onUp, { capture: true });
+          canvas.addEventListener("mouseup", onUp, { capture: true });
+
           (canvas as any).__qarm_ripple_cleanup = () => {
-            canvas.removeEventListener("pointermove", onMove);
-            canvas.removeEventListener("pointerover", onMove);
-            canvas.removeEventListener("pointerdown", onDown);
-            canvas.removeEventListener("pointerup", onUp);
-            canvas.removeEventListener("pointerleave", onLeave);
-            canvas.removeEventListener("pointercancel", onLeave);
+            canvas.removeEventListener("pointermove", onMove, { capture: true });
+            canvas.removeEventListener("mousemove", onMove, { capture: true });
+            canvas.removeEventListener("pointerdown", onDown, { capture: true });
+            canvas.removeEventListener("mousedown", onDown, { capture: true });
+            canvas.removeEventListener("pointerup", onUp, { capture: true });
+            canvas.removeEventListener("mouseup", onUp, { capture: true });
           };
         }
       });
@@ -308,12 +371,54 @@ export function App() {
     return { x, y, screenX: clampedX, screenY: clampedY };
   }, []);
 
+  // Global capture-phase cursor tracking: ensures the blue touch dot follows the
+  // cursor throughout any hover or drag gesture, even when noVNC's full-screen
+  // capture element (#noVNC_mouse_capture_elem, z-index 10000) intercepts events.
+  useEffect(() => {
+    if (displayMode !== "embedded") return;
+
+    const onGlobalMove = (e: MouseEvent | PointerEvent) => {
+      const coords = getGuestCoords(e.clientX, e.clientY);
+      if (coords) {
+        setTouchFeedback({
+          x: coords.screenX,
+          y: coords.screenY,
+          visible: true,
+        });
+      } else if (!isPointerDownRef.current) {
+        setTouchFeedback((prev) => (prev.visible ? { ...prev, visible: false } : prev));
+      }
+    };
+
+    const onGlobalUp = (e: MouseEvent | PointerEvent) => {
+      isPointerDownRef.current = false;
+      const coords = getGuestCoords(e.clientX, e.clientY);
+      if (coords) {
+        setTouchFeedback({ x: coords.screenX, y: coords.screenY, visible: true });
+      } else {
+        setTouchFeedback((prev) => (prev.visible ? { ...prev, visible: false } : prev));
+      }
+    };
+
+    window.addEventListener("pointermove", onGlobalMove, { capture: true, passive: true });
+    window.addEventListener("mousemove", onGlobalMove, { capture: true, passive: true });
+    window.addEventListener("pointerup", onGlobalUp, { capture: true });
+    window.addEventListener("mouseup", onGlobalUp, { capture: true });
+    window.addEventListener("pointercancel", onGlobalUp, { capture: true });
+
+    return () => {
+      window.removeEventListener("pointermove", onGlobalMove, { capture: true });
+      window.removeEventListener("mousemove", onGlobalMove, { capture: true });
+      window.removeEventListener("pointerup", onGlobalUp, { capture: true });
+      window.removeEventListener("mouseup", onGlobalUp, { capture: true });
+      window.removeEventListener("pointercancel", onGlobalUp, { capture: true });
+    };
+  }, [displayMode, getGuestCoords]);
+
   const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     // Embedded mode: noVNC (viewOnly=false) relays pointer events over VNC
     // to the guest's USB tablet. Do NOT dispatch via the touch daemon (would
-    // double-input), but mirror the SDL/scrcpy feedback pattern: show the
-    // blue ripple where the press lands and track the drag so the circle
-    // never sticks at a previous click position.
+    // double-input). Keep the blue touch dot visible and tracking.
     if (displayMode === "embedded") {
       const coords = getGuestCoords(e.clientX, e.clientY);
       if (coords) {
@@ -336,20 +441,16 @@ export function App() {
   };
 
   const handlePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
-    // Embedded: while pressed, follow the pointer with the blue circle (same
-    // as SDL/scrcpy). On hover noVNC draws its own dot cursor, so nothing to
-    // track here - this keeps the two indicators in sync.
+    const coords = getGuestCoords(e.clientX, e.clientY);
     if (displayMode === "embedded") {
-      if (isPointerDownRef.current) {
-        const coords = getGuestCoords(e.clientX, e.clientY);
-        if (coords) {
-          setTouchFeedback({ x: coords.screenX, y: coords.screenY, visible: true });
-        }
+      if (coords) {
+        setTouchFeedback({ x: coords.screenX, y: coords.screenY, visible: true });
+      } else if (!isPointerDownRef.current) {
+        setTouchFeedback((prev) => (prev.visible ? { ...prev, visible: false } : prev));
       }
       return;
     }
     if (!isPointerDownRef.current) return;
-    const coords = getGuestCoords(e.clientX, e.clientY);
     if (!coords) return;
 
     setTouchFeedback({ x: coords.screenX, y: coords.screenY, visible: true });
@@ -357,10 +458,14 @@ export function App() {
   };
 
   const handlePointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
-    // Embedded: release hides the ripple, exactly like the daemon path.
     if (displayMode === "embedded") {
       isPointerDownRef.current = false;
-      setTouchFeedback((prev) => ({ ...prev, visible: false }));
+      const coords = getGuestCoords(e.clientX, e.clientY);
+      if (coords) {
+        setTouchFeedback({ x: coords.screenX, y: coords.screenY, visible: true });
+      } else {
+        setTouchFeedback((prev) => (prev.visible ? { ...prev, visible: false } : prev));
+      }
       return;
     }
     if (!isPointerDownRef.current) return;
@@ -377,6 +482,12 @@ export function App() {
     } catch {}
   };
 
+  const handlePointerLeave = () => {
+    if (displayMode === "embedded" && !isPointerDownRef.current) {
+      setTouchFeedback((prev) => (prev.visible ? { ...prev, visible: false } : prev));
+    }
+  };
+
   const handleContextMenu = (e: React.MouseEvent) => {
     e.preventDefault();
     // Right-click triggers Android Back button
@@ -385,8 +496,8 @@ export function App() {
 
   const handleStart = async () => {
     if (!imageConfig.provisioned) {
-      setLogMsg("Install the Android image first (Configure Image → Install).");
-      setShowConfig(true);
+      setLogMsg("Install the Android image first in Settings.");
+      setShowSettings(true);
       return;
     }
     setLogMsg(`Launching Android VM in ${displayMode} mode...`);
@@ -403,40 +514,82 @@ export function App() {
     }
   };
 
-  // --- Image setup handlers ---
-  const openConfig = async () => {
+  // --- Settings & Runtime handlers ---
+  const openSettings = async () => {
     await loadImageConfig();
-    setShowConfig(true);
+    setShowSettings(true);
   };
 
-  const saveConfigDraft = async () => {
+  const saveSettingsDraft = async () => {
     try {
       const cfg = await invoke<ImageConfig>("save_image_config", {
-        diskSizeGb: configDraft.sizeGb,
-        fsFormat: configDraft.fs,
+        diskSizeGb: settingsDraft.sizeGb,
+        fsFormat: settingsDraft.fs,
+        cores: settingsDraft.cores,
+        memoryGb: settingsDraft.memoryGb,
+        gpuMode: settingsDraft.gpuMode,
+        closeOnExit: settingsDraft.closeOnExit,
       });
       setImageConfig(cfg);
+      setLogMsg("Settings saved successfully.");
+      setSavePopup({
+        visible: true,
+        message: `• Partition Size: ${cfg.disk_size_gb} GB (${cfg.fs_format})\n• vCPU Cores: ${cfg.cores} Cores\n• RAM Memory: ${cfg.memory_gb} GB\n• GPU Acceleration: ${cfg.gpu_mode}\n• Close on Exit: ${cfg.close_on_exit ? "Enabled (stop emulator)" : "Disabled (keep running)"}\n• Display Engine: ${displayMode}`,
+        isError: false,
+      });
     } catch (e) {
-      setLogMsg(`Could not save image config: ${e}`);
+      setLogMsg(`Could not save settings: ${e}`);
+      setSavePopup({
+        visible: true,
+        message: `Failed to save settings: ${e}`,
+        isError: true,
+      });
     }
   };
 
-  const handleProvision = async (force: boolean) => {
-    // Persist the chosen size/format before building.
-    await saveConfigDraft();
+  const handleOpenRuntimeFolder = async () => {
+    try {
+      await invoke("open_runtime_folder");
+    } catch (e) {
+      setLogMsg(`Could not open runtime folder: ${e}`);
+    }
+  };
+
+  const handleOptimize = async () => {
+    try {
+      const res = await invoke<string>("optimize_performance");
+      setLogMsg(res);
+    } catch (e) {
+      setLogMsg(`Optimize error: ${e}`);
+    }
+  };
+
+  const handleProvision = async (force: boolean, rebuildDisk: boolean = false) => {
+    if (status.running) {
+      setLogMsg("Cannot rebuild disk while emulator is running. Please stop the emulator first.");
+      setSavePopup({
+        visible: true,
+        message: "The emulator is currently running. Please click 'Stop Emulator' before rebuilding or modifying the virtual disk.",
+        isError: true,
+      });
+      return;
+    }
+    // Persist the chosen settings before building.
+    await saveSettingsDraft();
     setProvisioning(true);
     setProvision({
       percent: 0,
       stage: "Starting",
-      message: "Preparing to install the Android image...",
+      message: rebuildDisk ? "Rebuilding Android virtual disk image..." : "Preparing to install the Android image...",
       done: false,
       error: false,
     });
     try {
       const msg = await invoke<string>("provision_image", {
         force,
-        diskSizeGb: configDraft.sizeGb,
-        fsFormat: configDraft.fs,
+        rebuildDisk,
+        diskSizeGb: settingsDraft.sizeGb,
+        fsFormat: settingsDraft.fs,
       });
       setLogMsg(msg);
     } catch (e) {
@@ -445,9 +598,34 @@ export function App() {
     }
   };
 
-  const closeConfig = () => {
+  const requestRebuild = (force: boolean) => {
+    if (status.running) {
+      setLogMsg("Cannot rebuild disk while emulator is running. Please stop the emulator first.");
+      setSavePopup({
+        visible: true,
+        message: "The emulator is currently running. Please click 'Stop Emulator' before rebuilding or modifying the virtual disk.",
+        isError: true,
+      });
+      return;
+    }
+    if (imageConfig.provisioned) {
+      setConfirmRebuild({
+        visible: true,
+        force,
+        targetSizeGb: settingsDraft.sizeGb,
+        currentSizeGb: imageConfig.disk_size_gb,
+        fsFormat: settingsDraft.fs,
+        isShrink: settingsDraft.sizeGb < imageConfig.disk_size_gb,
+        isExpand: settingsDraft.sizeGb > imageConfig.disk_size_gb,
+      });
+    } else {
+      handleProvision(force, true);
+    }
+  };
+
+  const closeSettings = () => {
     if (provisioning) return; // don't allow closing mid-build
-    setShowConfig(false);
+    setShowSettings(false);
   };
 
   const handleStop = async () => {
@@ -586,21 +764,6 @@ export function App() {
 
   return (
     <div className="app-container">
-      {/* Android Image Setup overlay (install / update disk size / format) */}
-      {showConfig && (
-        <ImageConfigPanel
-          config={imageConfig}
-          draft={configDraft}
-          setDraft={setConfigDraft}
-          provisioning={provisioning}
-          provision={provision}
-          onInstall={() => handleProvision(false)}
-          onForceReinstall={() => handleProvision(true)}
-          onSave={saveConfigDraft}
-          onClose={closeConfig}
-        />
-      )}
-
       {/* Top Header / Status Bar */}
       <header className="top-header">
         <div className="brand">
@@ -683,8 +846,8 @@ export function App() {
           )}
 
           {!status.running && (
-            <button className="btn btn-secondary" onClick={openConfig} title="Install or reconfigure the Android image (disk size, filesystem)">
-              ⚙ Configure Image
+            <button className="btn btn-secondary" onClick={openSettings} title="Emulator Settings (Runtime, Images, VM Hardware & Preferences)">
+              ⚙ Settings
             </button>
           )}
 
@@ -718,6 +881,7 @@ export function App() {
           onPointerMove={handlePointerMove}
           onPointerUp={handlePointerUp}
           onPointerCancel={handlePointerUp}
+          onPointerLeave={handlePointerLeave}
           onContextMenu={handleContextMenu}
         >
           {/* RFB Canvas mount point (direct 1:1 hardware touch via low-latency daemon) */}
@@ -726,7 +890,7 @@ export function App() {
           {/* Visual touch feedback ripple */}
           {touchFeedback.visible && (
             <div
-              className="touch-ripple"
+              className={`touch-ripple ${isPointerDownRef.current ? "active" : ""}`}
               style={{
                 left: `${touchFeedback.x}px`,
                 top: `${touchFeedback.y}px`,
@@ -880,176 +1044,739 @@ export function App() {
           </span>
         </div>
       </footer>
+
+      {showSettings && (
+        <SettingsModal
+          config={imageConfig}
+          draft={settingsDraft}
+          setDraft={setSettingsDraft}
+          provisioning={provisioning}
+          provision={provision}
+          isEmulatorRunning={status.running}
+          displayMode={displayMode}
+          setDisplayMode={setDisplayMode}
+          onInstall={() => requestRebuild(false)}
+          onForceReinstall={() => requestRebuild(true)}
+          onSave={saveSettingsDraft}
+          onOpenRuntimeFolder={handleOpenRuntimeFolder}
+          onOptimize={handleOptimize}
+          onClose={closeSettings}
+        />
+      )}
+
+      {/* Save Settings Confirmation Pop Up Modal */}
+      {savePopup.visible && (
+        <div className="popup-overlay" onClick={() => setSavePopup({ visible: false, message: "" })}>
+          <div className="popup-dialog" onClick={(e) => e.stopPropagation()}>
+            <div className="popup-header">
+              <span className="popup-icon">{savePopup.isError ? "❌" : "✅"}</span>
+              <h3>{savePopup.isError ? "Error Saving Settings" : "Settings Saved"}</h3>
+            </div>
+            <div className="popup-body">
+              <p className="popup-desc">
+                {savePopup.isError
+                  ? "An error occurred while saving your configuration:"
+                  : "Your configuration changes have been applied and persisted:"}
+              </p>
+              <pre className="popup-pre">{savePopup.message}</pre>
+            </div>
+            <div className="popup-footer">
+              <button
+                className="btn btn-primary"
+                onClick={() => setSavePopup({ visible: false, message: "" })}
+              >
+                OK
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Rebuild & Data Wipe Confirmation Warning Modal */}
+      {confirmRebuild.visible && (
+        <div className="popup-overlay" onClick={() => setConfirmRebuild((c) => ({ ...c, visible: false }))}>
+          <div className="popup-dialog warning" onClick={(e) => e.stopPropagation()}>
+            <div className="popup-header">
+              <span className="popup-icon">⚠️</span>
+              <h3>Confirm Disk Rebuild & Factory Reset</h3>
+            </div>
+            <div className="popup-body">
+              <div className="popup-warn-box">
+                <strong>⚠️ Warning: All Android User Data Will Be Reset</strong>
+                <p>
+                  Virtual partition resizing cannot be performed on encrypted Android userdata without re-initializing the filesystem.
+                  Proceeding will <strong>erase all user data, installed applications, and personal settings</strong> (equivalent to a Factory Reset).
+                </p>
+                <p>
+                  <em>Note: The core Android 16 system image is immutable and preserved. Only the user storage partition (/data) is reset.</em>
+                </p>
+              </div>
+
+              <div className="popup-specs">
+                <div className="popup-specs-row">
+                  <span>Operation:</span>
+                  <strong>
+                    {confirmRebuild.force
+                      ? "Full Reinstallation"
+                      : confirmRebuild.isShrink
+                      ? "Shrink Virtual Disk (📉)"
+                      : confirmRebuild.isExpand
+                      ? "Expand Virtual Disk (📈)"
+                      : "Rebuild Partition Layout"}
+                  </strong>
+                </div>
+                <div className="popup-specs-row">
+                  <span>Current Capacity:</span>
+                  <span>{confirmRebuild.currentSizeGb} GB</span>
+                </div>
+                <div className="popup-specs-row">
+                  <span>New Capacity:</span>
+                  <strong>{confirmRebuild.targetSizeGb} GB</strong>
+                </div>
+                <div className="popup-specs-row">
+                  <span>Target Filesystem:</span>
+                  <span>{confirmRebuild.fsFormat}</span>
+                </div>
+              </div>
+            </div>
+            <div className="popup-footer">
+              <button
+                className="btn btn-secondary"
+                onClick={() => setConfirmRebuild((c) => ({ ...c, visible: false }))}
+              >
+                Cancel
+              </button>
+              <button
+                className="btn btn-danger"
+                onClick={() => {
+                  const force = confirmRebuild.force;
+                  setConfirmRebuild((c) => ({ ...c, visible: false }));
+                  handleProvision(force, true);
+                }}
+              >
+                Yes, Rebuild & Reset Data
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
 
 // -----------------------------------------------------------------------------
-// Android Image Setup panel: install / update the runtime, choose disk size and
-// userdata filesystem. Long operations stream real progress from the Rust host.
+// Android Settings Modal: Tabbed management for Images & Storage, Runtime &
+// Tools, VM & Hardware Options, and System Information.
 // -----------------------------------------------------------------------------
-interface ImageConfigPanelProps {
+interface SettingsModalProps {
   config: ImageConfig;
-  draft: { sizeGb: number; fs: string };
-  setDraft: React.Dispatch<React.SetStateAction<{ sizeGb: number; fs: string }>>;
+  draft: {
+    sizeGb: number;
+    fs: string;
+    cores: number;
+    memoryGb: number;
+    gpuMode: string;
+    closeOnExit: boolean;
+  };
+  setDraft: React.Dispatch<
+    React.SetStateAction<{
+      sizeGb: number;
+      fs: string;
+      cores: number;
+      memoryGb: number;
+      gpuMode: string;
+      closeOnExit: boolean;
+    }>
+  >;
   provisioning: boolean;
   provision: ProvisionProgress;
+  isEmulatorRunning: boolean;
+  displayMode: "scrcpy" | "embedded" | "sdl";
+  setDisplayMode: (m: "scrcpy" | "embedded" | "sdl") => void;
   onInstall: () => void;
   onForceReinstall: () => void;
   onSave: () => void;
+  onOpenRuntimeFolder: () => void;
+  onOptimize: () => void;
   onClose: () => void;
 }
 
-const DISK_SIZES = [16, 32, 64, 128];
+const PRESET_DISK_SIZES = [8, 16, 32, 64];
+const CORE_OPTIONS = [4, 6, 8];
+const MEMORY_OPTIONS = [4, 6, 8, 12, 16];
 
-function ImageConfigPanel({
+function SettingsModal({
   config,
   draft,
   setDraft,
   provisioning,
   provision,
+  isEmulatorRunning,
+  displayMode,
+  setDisplayMode,
   onInstall,
   onForceReinstall,
   onSave,
+  onOpenRuntimeFolder,
+  onOptimize,
   onClose,
-}: ImageConfigPanelProps) {
+}: SettingsModalProps) {
+  const [activeTab, setActiveTab] = useState<"images" | "runtime" | "options" | "about">("images");
+  const [isCustomSize, setIsCustomSize] = useState<boolean>(() => !PRESET_DISK_SIZES.includes(draft.sizeGb));
+  const [customInputVal, setCustomInputVal] = useState<string>(draft.sizeGb.toString());
+
+  const handleSelectPreset = (gb: number) => {
+    setIsCustomSize(false);
+    setDraft((d) => ({ ...d, sizeGb: gb }));
+    setCustomInputVal(gb.toString());
+  };
+
+  const handleSelectCustom = () => {
+    setIsCustomSize(true);
+    const n = parseInt(customInputVal, 10);
+    if (!isNaN(n) && n >= 4 && n <= 256) {
+      setDraft((d) => ({ ...d, sizeGb: n }));
+    }
+  };
+
+  const handleCustomChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const s = e.target.value;
+    setCustomInputVal(s);
+    const n = parseInt(s, 10);
+    if (!isNaN(n) && n >= 4 && n <= 256) {
+      setDraft((d) => ({ ...d, sizeGb: n }));
+    }
+  };
+
+  const handleCustomBlur = () => {
+    let n = parseInt(customInputVal, 10);
+    if (isNaN(n) || n < 4) n = 4;
+    if (n > 256) n = 256;
+    setCustomInputVal(n.toString());
+    setDraft((d) => ({ ...d, sizeGb: n }));
+  };
+
   const showProgress = provisioning || provision.done || provision.percent > 0;
   const pct = Math.max(0, Math.min(100, provision.percent));
 
   return (
-    <div className="config-overlay">
-      <div className="config-panel">
+    <div
+      className="config-overlay"
+      onClick={(e) => {
+        if (e.target === e.currentTarget && !provisioning) onClose();
+      }}
+    >
+      <div className="config-panel settings-panel">
         <div className="config-head">
           <div>
-            <h2>🤖 Android Image Setup</h2>
+            <h2>⚙️ Emulator Settings</h2>
             <p className="config-sub">
-              Install the ARM64 Android image and configure its virtual disk before launching the emulator.
+              Manage runtime environments, virtual disks, hardware allocation and launch options.
             </p>
           </div>
           {!provisioning && (
-            <button className="config-close" onClick={onClose} title="Close">
+            <button className="config-close" onClick={onClose} title="Close Settings">
               ✕
             </button>
           )}
         </div>
 
-        <div className="config-status-row">
-          <span className={`status-chip ${config.installed ? "ok" : "warn"}`}>
-            Runtime: {config.installed ? "Present" : "Missing"}
-          </span>
-          <span className={`status-chip ${config.provisioned ? "ok" : "warn"}`}>
-            Image: {config.provisioned ? "Installed" : "Not installed"}
-          </span>
-          {config.runtime_root && (
-            <span className="status-chip muted" title={config.runtime_root}>
-              {config.runtime_root.length > 42
-                ? "…" + config.runtime_root.slice(-40)
-                : config.runtime_root}
-            </span>
-          )}
+        {/* Navigation Tabs */}
+        <div className="settings-tabs">
+          <button
+            className={`settings-tab-btn ${activeTab === "images" ? "active" : ""}`}
+            onClick={() => setActiveTab("images")}
+          >
+            💾 Images & Storage
+          </button>
+          <button
+            className={`settings-tab-btn ${activeTab === "runtime" ? "active" : ""}`}
+            onClick={() => setActiveTab("runtime")}
+          >
+            🛠️ Runtime & Tools
+          </button>
+          <button
+            className={`settings-tab-btn ${activeTab === "options" ? "active" : ""}`}
+            onClick={() => setActiveTab("options")}
+          >
+            ⚡ VM & Hardware
+          </button>
+          <button
+            className={`settings-tab-btn ${activeTab === "about" ? "active" : ""}`}
+            onClick={() => setActiveTab("about")}
+          >
+            ℹ️ System & About
+          </button>
         </div>
 
-        <div className="config-grid">
-          {/* Disk size */}
-          <section className="config-section">
-            <span className="section-title">Userdata Disk Size</span>
-            <p className="section-help">
-              Space allocated for Android apps &amp; data (virtual GPT partition).
-            </p>
-            <div className="seg-control">
-              {DISK_SIZES.map((gb) => (
-                <button
-                  key={gb}
-                  className={`seg-btn ${draft.sizeGb === gb ? "active" : ""}`}
-                  disabled={provisioning}
-                  onClick={() => setDraft((d) => ({ ...d, sizeGb: gb }))}
-                >
-                  {gb} GB
-                </button>
-              ))}
-            </div>
-          </section>
-
-          {/* Filesystem format */}
-          <section className="config-section">
-            <span className="section-title">Userdata Filesystem</span>
-            <p className="section-help">
-              Format used for the <code>/data</code> partition on first boot.
-            </p>
-            <div className="seg-control">
-              <button
-                className={`seg-btn ${draft.fs === "ext4" ? "active" : ""}`}
-                disabled={provisioning}
-                onClick={() => setDraft((d) => ({ ...d, fs: "ext4" }))}
-              >
-                ext4
-                <small>Stable, widely compatible</small>
-              </button>
-              <button
-                className={`seg-btn ${draft.fs === "f2fs" ? "active" : ""}`}
-                disabled={provisioning}
-                onClick={() => setDraft((d) => ({ ...d, fs: "f2fs" }))}
-              >
-                f2fs
-                <small>Flash-optimized, faster on SSD</small>
-              </button>
-            </div>
-          </section>
-        </div>
-
-        {/* Progress */}
-        {showProgress && (
-          <div className="config-progress">
-            <div className="progress-track">
-              <div
-                className={`progress-fill ${provision.error ? "error" : provision.done ? "done" : ""}`}
-                style={{ width: `${pct}%` }}
-              />
-            </div>
-            <div className="progress-meta">
-              <span className={`progress-stage ${provision.error ? "err" : ""}`}>
-                {provision.error ? "❌ " : provision.done ? "✅ " : ""}
-                {provision.stage || "Working…"}
+        {/* Tab 1: Images & Storage */}
+        {activeTab === "images" && (
+          <div className="tab-body">
+            <div className="config-status-row">
+              <span className={`status-chip ${config.kernel_present ? "ok" : "warn"}`}>
+                Kernel: {config.kernel_present ? "Present" : "Missing"}
               </span>
-              <span className="progress-pct">{pct}%</span>
+              <span className={`status-chip ${config.super_present ? "ok" : "warn"}`}>
+                Super Image: {config.super_present ? "Present" : "Missing"}
+              </span>
+              <span className={`status-chip ${config.disk_present ? "ok" : "warn"}`}>
+                Userdata Disk: {config.disk_present ? `Built (${config.disk_size_gb}GB ${config.fs_format})` : "Not Built"}
+              </span>
             </div>
-            {provision.message && (
-              <div className="progress-log">{provision.message}</div>
+
+            <div className="config-grid">
+              {/* Disk size */}
+              <section className="config-section">
+                <span className="section-title">Userdata Disk Size</span>
+                <p className="section-help">
+                  Virtual storage capacity allocated for Android applications and user data (4 - 256 GB).
+                </p>
+                <div className="seg-control">
+                  {PRESET_DISK_SIZES.map((gb) => (
+                    <button
+                      key={gb}
+                      className={`seg-btn ${!isCustomSize && draft.sizeGb === gb ? "active" : ""}`}
+                      disabled={provisioning}
+                      onClick={() => handleSelectPreset(gb)}
+                    >
+                      {gb} GB
+                    </button>
+                  ))}
+                  <button
+                    className={`seg-btn ${isCustomSize ? "active" : ""}`}
+                    disabled={provisioning}
+                    onClick={handleSelectCustom}
+                  >
+                    Custom
+                    <small>{isCustomSize ? `${draft.sizeGb} GB` : "Custom Size"}</small>
+                  </button>
+                </div>
+
+                {isCustomSize && (
+                  <div className="custom-size-box">
+                    <div className="custom-size-row">
+                      <label htmlFor="custom-disk-input">Custom Size:</label>
+                      <div className="custom-input-group">
+                        <input
+                          id="custom-disk-input"
+                          type="number"
+                          min="4"
+                          max="256"
+                          value={customInputVal}
+                          onChange={handleCustomChange}
+                          onBlur={handleCustomBlur}
+                          disabled={provisioning}
+                        />
+                        <span className="unit-label">GB</span>
+                      </div>
+                    </div>
+                    <span className="custom-size-hint">Enter custom size from 4 GB to 256 GB</span>
+                  </div>
+                )}
+
+                {/* Shrink / Expand Notices */}
+                {config.disk_present && draft.sizeGb < config.disk_size_gb && (
+                  <div className="partition-notice shrink">
+                    <span className="notice-icon">📉</span>
+                    <div className="notice-content">
+                      <strong>Shrink Partition: {config.disk_size_gb} GB → {draft.sizeGb} GB</strong>
+                      <p>
+                        Decreasing capacity requires rebuilding disk.raw down to {draft.sizeGb} GB.
+                        <strong> Note: All Android guest user data will be reset (Factory Reset).</strong>
+                      </p>
+                    </div>
+                  </div>
+                )}
+
+                {config.disk_present && draft.sizeGb > config.disk_size_gb && (
+                  <div className="partition-notice expand">
+                    <span className="notice-icon">📈</span>
+                    <div className="notice-content">
+                      <strong>Expand Partition: {config.disk_size_gb} GB → {draft.sizeGb} GB</strong>
+                      <p>
+                        Increasing capacity will rebuild the partition layout to {draft.sizeGb} GB.
+                        <strong> Note: Partition resizing requires re-initializing user data (Factory Reset).</strong>
+                      </p>
+                    </div>
+                  </div>
+                )}
+
+                {isEmulatorRunning && (
+                  <div className="partition-notice shrink">
+                    <span className="notice-icon">⚠️</span>
+                    <div className="notice-content">
+                      <strong>Emulator is currently running</strong>
+                      <p>Please click 'Stop Emulator' from the main toolbar before rebuilding or resizing virtual disks.</p>
+                    </div>
+                  </div>
+                )}
+              </section>
+
+              {/* Filesystem format */}
+              <section className="config-section">
+                <span className="section-title">Userdata Filesystem</span>
+                <p className="section-help">
+                  Filesystem format for <code>/data</code> partition created during provisioning.
+                </p>
+                <div className="seg-control">
+                  <button
+                    className={`seg-btn ${draft.fs === "ext4" ? "active" : ""}`}
+                    disabled={provisioning || isEmulatorRunning}
+                    onClick={() => setDraft((d) => ({ ...d, fs: "ext4" }))}
+                  >
+                    ext4
+                    <small>Standard, highly robust</small>
+                  </button>
+                  <button
+                    className={`seg-btn ${draft.fs === "f2fs" ? "active" : ""}`}
+                    disabled={provisioning || isEmulatorRunning}
+                    onClick={() => setDraft((d) => ({ ...d, fs: "f2fs" }))}
+                  >
+                    f2fs
+                    <small>Flash-native, faster writes</small>
+                  </button>
+                </div>
+              </section>
+            </div>
+
+            {/* Progress */}
+            {showProgress && (
+              <div className="config-progress">
+                <div className="progress-track">
+                  <div
+                    className={`progress-fill ${provision.error ? "error" : provision.done ? "done" : ""}`}
+                    style={{ width: `${pct}%` }}
+                  />
+                </div>
+                <div className="progress-meta">
+                  <span className={`progress-stage ${provision.error ? "err" : ""}`}>
+                    {provision.error ? "❌ " : provision.done ? "✅ " : ""}
+                    {provision.stage || "Working…"}
+                  </span>
+                  <span className="progress-pct">{pct}%</span>
+                </div>
+                {provision.message && (
+                  <div className="progress-log">{provision.message}</div>
+                )}
+              </div>
+            )}
+
+            <div className="config-actions">
+              <button
+                className="btn btn-primary btn-large"
+                disabled={provisioning || isEmulatorRunning}
+                onClick={onInstall}
+                title={isEmulatorRunning ? "Stop emulator first before rebuilding disk" : undefined}
+              >
+                {config.provisioned ? "⤓ Rebuild / Update Disk" : "▼ Install Android Image"}
+              </button>
+              {config.provisioned && (
+                <button
+                  className="btn btn-secondary"
+                  disabled={provisioning || isEmulatorRunning}
+                  onClick={onForceReinstall}
+                  title={isEmulatorRunning ? "Stop emulator first before reinstalling" : "Re-copy image assets and build clean disk.raw"}
+                >
+                  ⟳ Force Reinstall
+                </button>
+              )}
+              {!provisioning && (
+                <button
+                  className="btn btn-secondary"
+                  disabled={isEmulatorRunning}
+                  onClick={onSave}
+                  title="Save storage settings"
+                >
+                  💾 Save Preferences
+                </button>
+              )}
+            </div>
+
+            {!config.provisioned && !provisioning && (
+              <p className="config-note">
+                💡 First time? Click <strong>Install Android Image</strong>. This sets up the runtime directory,
+                provisions the QEMU engine, and builds the Android 16 raw GPT disk image.
+              </p>
             )}
           </div>
         )}
 
-        {/* Actions */}
-        <div className="config-actions">
-          <button
-            className="btn btn-primary btn-large"
-            disabled={provisioning}
-            onClick={onInstall}
-          >
-            {config.provisioned ? "⤓ Update / Rebuild Image" : "▼ Install Android Image"}
-          </button>
-          {config.provisioned && (
-            <button
-              className="btn btn-secondary"
-              disabled={provisioning}
-              onClick={onForceReinstall}
-              title="Force re-copy QEMU/image and rebuild disk.raw"
-            >
-              ⟳ Force Reinstall
-            </button>
-          )}
-          {!provisioning && (
-            <button className="btn btn-secondary" onClick={onSave} title="Save size/format selection">
-              💾 Save Settings
-            </button>
-          )}
-        </div>
+        {/* Tab 2: Runtime & Tools */}
+        {activeTab === "runtime" && (
+          <div className="tab-body">
+            <div className="runtime-banner">
+              <div className="runtime-banner-info">
+                <span className="runtime-banner-title">📁 Provisioned Runtime Root</span>
+                <span className="runtime-banner-path" title={config.runtime_root}>
+                  {config.runtime_root || "Not yet provisioned (%LOCALAPPDATA%\\QArmDroid)"}
+                </span>
+              </div>
+              <button
+                className="btn btn-secondary btn-sm"
+                onClick={onOpenRuntimeFolder}
+                title="Open runtime folder in Windows File Explorer"
+              >
+                📂 Open in Explorer
+              </button>
+            </div>
 
-        {!config.provisioned && !provisioning && (
-          <p className="config-note">
-            First time? Click <strong>Install Android Image</strong>. This copies the emulator engine
-            and builds the virtual disk (can take several minutes) — progress is shown above.
-          </p>
+            <div className="component-list">
+              <div className="component-card">
+                <div className="component-header">
+                  <div className="component-title">
+                    <span className="component-icon">⚡</span>
+                    <strong>QEMU Hypervisor (ARM64 WHPX)</strong>
+                  </div>
+                  <span className={`status-badge ${config.qemu_present ? "ok" : "err"}`}>
+                    {config.qemu_present ? "Detected" : "Missing"}
+                  </span>
+                </div>
+                <p className="component-desc">
+                  ARM64 native binary compiled with WHPX hardware acceleration and virtio-gpu support.
+                </p>
+                <div className="component-path">
+                  <code>{config.qemu_path || "Auto-detected during launch"}</code>
+                </div>
+              </div>
+
+              <div className="component-card">
+                <div className="component-header">
+                  <div className="component-title">
+                    <span className="component-icon">📱</span>
+                    <strong>Scrcpy Display Mirror</strong>
+                  </div>
+                  <span className={`status-badge ${config.scrcpy_present ? "ok" : "err"}`}>
+                    {config.scrcpy_present ? "Bundled" : "Missing"}
+                  </span>
+                </div>
+                <p className="component-desc">
+                  Direct3D 11 hardware-rendered mirror providing ultra-smooth 60 FPS streaming and 100% accurate sRGB color.
+                </p>
+                <div className="component-path">
+                  <code>{config.scrcpy_path || "tools/scrcpy/scrcpy.exe"}</code>
+                </div>
+              </div>
+
+              <div className="component-card">
+                <div className="component-header">
+                  <div className="component-title">
+                    <span className="component-icon">🔌</span>
+                    <strong>Android Debug Bridge (ADB)</strong>
+                  </div>
+                  <span className={`status-badge ${config.adb_present ? "ok" : "warn"}`}>
+                    {config.adb_present ? "Connected" : "Not on PATH"}
+                  </span>
+                </div>
+                <p className="component-desc">
+                  Used for guest command dispatch, key injection, daemon port forwarding, and system status checks.
+                </p>
+                <div className="component-path">
+                  <code>{config.adb_path || "adb"}</code>
+                </div>
+              </div>
+
+              <div className="component-card">
+                <div className="component-header">
+                  <div className="component-title">
+                    <span className="component-icon">🐍</span>
+                    <strong>Python Environment</strong>
+                  </div>
+                  <span className={`status-badge ${config.python_present ? "ok" : "warn"}`}>
+                    {config.python_present ? "Ready" : "Missing"}
+                  </span>
+                </div>
+                <p className="component-desc">
+                  Bundled Python executable used for raw disk partition generation and provisioning utilities.
+                </p>
+              </div>
+            </div>
+
+            <div className="config-actions">
+              <button className="btn btn-secondary" onClick={onOpenRuntimeFolder}>
+                📂 Open Runtime Directory
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Tab 3: VM & Hardware Options */}
+        {activeTab === "options" && (
+          <div className="tab-body">
+            <div className="config-grid">
+              {/* Display Mode */}
+              <section className="config-section">
+                <span className="section-title">Default Display Mode</span>
+                <p className="section-help">
+                  Select which video output engine to attach upon emulator launch.
+                </p>
+                <div className="seg-control">
+                  <button
+                    className={`seg-btn ${displayMode === "embedded" ? "active" : ""}`}
+                    onClick={() => setDisplayMode("embedded")}
+                  >
+                    🌐 Embedded
+                    <small>Canvas inside window</small>
+                  </button>
+                  <button
+                    className={`seg-btn ${displayMode === "scrcpy" ? "active" : ""}`}
+                    onClick={() => setDisplayMode("scrcpy")}
+                  >
+                    📱 Scrcpy
+                    <small>60 FPS true color mirror</small>
+                  </button>
+                  <button
+                    className={`seg-btn ${displayMode === "sdl" ? "active" : ""}`}
+                    onClick={() => setDisplayMode("sdl")}
+                  >
+                    🖥️ SDL
+                    <small>Native DirectX window</small>
+                  </button>
+                </div>
+              </section>
+
+              {/* vCPU Cores */}
+              <section className="config-section">
+                <span className="section-title">vCPU Core Count</span>
+                <p className="section-help">
+                  Number of host CPU cores passed to QEMU (-smp).
+                </p>
+                <div className="seg-control">
+                  {CORE_OPTIONS.map((c) => (
+                    <button
+                      key={c}
+                      className={`seg-btn ${draft.cores === c ? "active" : ""}`}
+                      onClick={() => setDraft((d) => ({ ...d, cores: c }))}
+                    >
+                      {c} Cores
+                      <small>{c === 6 ? "Recommended (Snapdragon)" : c === 4 ? "Power-saver" : "High load"}</small>
+                    </button>
+                  ))}
+                </div>
+              </section>
+
+              {/* RAM Memory */}
+              <section className="config-section">
+                <span className="section-title">RAM Allocation</span>
+                <p className="section-help">
+                  Host system memory dedicated to the Android guest (-m).
+                </p>
+                <div className="seg-control">
+                  {MEMORY_OPTIONS.map((m) => (
+                    <button
+                      key={m}
+                      className={`seg-btn ${draft.memoryGb === m ? "active" : ""}`}
+                      onClick={() => setDraft((d) => ({ ...d, memoryGb: m }))}
+                    >
+                      {m} GB
+                      <small>{m === 6 ? "Default" : m >= 12 ? "Pro apps" : "Standard"}</small>
+                    </button>
+                  ))}
+                </div>
+              </section>
+
+              {/* GPU Mode */}
+              <section className="config-section">
+                <span className="section-title">GPU Acceleration Mode</span>
+                <p className="section-help">
+                  Graphics rendering pipeline and driver emulation mode.
+                </p>
+                <div className="seg-control">
+                  <button
+                    className={`seg-btn ${draft.gpuMode === "basic" ? "active" : ""}`}
+                    onClick={() => setDraft((d) => ({ ...d, gpuMode: "basic" }))}
+                  >
+                    basic
+                    <small>VirtIO SwiftShader (100% stable)</small>
+                  </button>
+                  <button
+                    className={`seg-btn ${draft.gpuMode === "gfxstream" ? "active" : ""}`}
+                    onClick={() => setDraft((d) => ({ ...d, gpuMode: "gfxstream" }))}
+                  >
+                    gfxstream
+                    <small>Rutabaga Vulkan passthrough</small>
+                  </button>
+                </div>
+              </section>
+
+              {/* Application Exit Behavior */}
+              <section className="config-section">
+                <span className="section-title">Application Exit Behavior</span>
+                <p className="section-help">
+                  Choose whether closing this window terminates the running Android emulator.
+                </p>
+                <div className="seg-control">
+                  <button
+                    className={`seg-btn ${draft.closeOnExit ? "active" : ""}`}
+                    onClick={() => setDraft((d) => ({ ...d, closeOnExit: true }))}
+                  >
+                    🛑 Close Emulator
+                    <small>Terminate QEMU when window exits</small>
+                  </button>
+                  <button
+                    className={`seg-btn ${!draft.closeOnExit ? "active" : ""}`}
+                    onClick={() => setDraft((d) => ({ ...d, closeOnExit: false }))}
+                  >
+                    🔄 Keep Running
+                    <small>Leave emulator active in background</small>
+                  </button>
+                </div>
+              </section>
+            </div>
+
+            <div className="optimization-card">
+              <div>
+                <strong>⚡ Android Guest Animation Speedup</strong>
+                <p className="section-help">
+                  Eliminates window, transition, and animator duration scales in the Android guest for instantaneous app switching.
+                </p>
+              </div>
+              <button className="btn btn-secondary" onClick={onOptimize}>
+                ⚡ Optimize Now
+              </button>
+            </div>
+
+            <div className="config-actions">
+              <button className="btn btn-primary" onClick={onSave} title="Save hardware and display preferences">
+                💾 Save Preferences
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Tab 4: System & About */}
+        {activeTab === "about" && (
+          <div className="tab-body">
+            <div className="about-grid">
+              <div className="about-item">
+                <span className="about-label">Host Operating System</span>
+                <span className="about-val">Windows 11 ARM64 (Snapdragon X Elite / Oryon)</span>
+              </div>
+              <div className="about-item">
+                <span className="about-label">Hypervisor Platform</span>
+                <span className="about-val">Windows Hypervisor Platform (WHPX / -accel whpx)</span>
+              </div>
+              <div className="about-item">
+                <span className="about-label">Guest Android Target</span>
+                <span className="about-val">Android 16 (Baklava) AOSP ARM64 Phone (Cuttlefish)</span>
+              </div>
+              <div className="about-item">
+                <span className="about-label">Input Architecture</span>
+                <span className="about-val">Zero-Latency Native TCP Daemon (6666) + Direct USB HID</span>
+              </div>
+              <div className="about-item">
+                <span className="about-label">Networking & Ports</span>
+                <span className="about-val">VNC: 127.0.0.1:5901 | ADB: 127.0.0.1:5555 | Daemon: 6666</span>
+              </div>
+              <div className="about-item">
+                <span className="about-label">Color Space Handling</span>
+                <span className="about-val">Hardware SVG BGR-swap filter (Embedded) / sRGB (Scrcpy / SDL)</span>
+              </div>
+            </div>
+
+            <p className="config-note">
+              QArmDroid — Native ARM64 Android virtualization on Windows on Snapdragon.
+            </p>
+          </div>
         )}
       </div>
     </div>

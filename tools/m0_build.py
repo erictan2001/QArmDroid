@@ -195,8 +195,9 @@ def make_gpt(disk_path: str, parts: list):
         bak_hdr[16:20] = struct.pack("<I", crc32(bytes(bak_hdr)))
         f.seek(bak_entries_lba * SECTOR); f.write(entries)
         f.seek(last_lba * SECTOR); f.write(bytes(bak_hdr).ljust(SECTOR, b"\x00"))
-        # ensure file length
+        # ensure file length and truncate when shrinking
         f.seek(total_lba * SECTOR - 1); f.write(b"\x00")
+        f.truncate(total_lba * SECTOR)
     return total_lba
 
 def sparse_copy(sparse_path: str, raw_path: str):
@@ -454,9 +455,11 @@ def main():
     if stage in ("all", "super"):
         raw = os.path.join(WORK, "super_raw.img")
         if not os.path.exists(raw) or os.path.getsize(raw) < 8_000_000_000:
+            print("PROGRESS 62 Unsparsing super.img -> 8.59 GB raw...")
             print("[3/5] unsparse super.img -> 8.59 GB raw (this takes a while)")
             sparse_copy(os.path.join(IMG, "super.img"), raw)
         else:
+            print("PROGRESS 65 super_raw.img verified")
             print("[3/5] super_raw.img already present")
 
     if stage in ("all", "disk"):
@@ -511,16 +514,29 @@ def main():
             "super": os.path.join(WORK, "super_raw.img"),
         }
         disk = os.path.join(WORK, DISK_NAME)
-        if not os.path.exists(disk):
-            # mark sparse (NTFS) then materialize
-            open(disk, "wb").close()
-            subprocess.run(["fsutil", "sparse", "setflag", disk], capture_output=True)
+        if os.path.exists(disk):
+            print(f"[4/5] Removing existing {disk} to rebuild clean {QARM_DISK_GB} GB virtual disk...")
+            try:
+                os.remove(disk)
+            except Exception as e:
+                raise SystemExit(f"Cannot overwrite {disk}: {e}. Ensure the emulator is stopped before rebuilding.")
+        # mark sparse (NTFS) then materialize
+        open(disk, "wb").close()
+        subprocess.run(["fsutil", "sparse", "setflag", disk], capture_output=True)
+        print("PROGRESS 72 Assembling GPT partition table...")
         total = make_gpt(disk, parts)
         print(f"[4/5] GPT disk: {total*SECTOR/1e9:.2f} GB virtual, parts: " +
               ", ".join(f"{n}@{s*SECTOR/1e9:.2f}G" for n, s, _ in parts))
+        
+        written_count = 0
+        total_parts_to_write = sum(1 for n, _, _ in parts if n in contents and os.path.exists(contents[n]))
         for name, start, size in parts:
             if name in contents and os.path.exists(contents[name]):
+                written_count += 1
+                pct = 75 + int((written_count / max(1, total_parts_to_write)) * 20)
+                print(f"PROGRESS {pct} Writing partition: {name} ({size/1e6:.1f} MB)...")
                 write_at(disk, start, contents[name])
+        print("PROGRESS 96 Initializing userdata filesystem configuration...")
         print("[4/5] disk content written (userdata/metadata/misc left zero -> formatted by guest)")
         # Record the chosen userdata filesystem + size so the UI and the
         # guest's fs_mgr agree. The partition is left zeroed; Android formats

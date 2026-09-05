@@ -68,8 +68,16 @@ if ($BundleRoot) {
     #   <bundle>\image\kernel, initrd.img, disk.raw
     #   <bundle>\tools\ (metric/docs; launch.ps1 itself lives here too)
     $QemuDir = Join-Path $BundleRoot "qemu"
-    if (-not $QemuPath) { $QemuPath = Join-Path $QemuDir "qemu-system-aarch64.exe" }
-    $pathAdditions = @($QemuDir)
+    if (-not $QemuPath) {
+        $repoQemu = Join-Path $GfxDir "qemu\build\qemu-system-aarch64.exe"
+        $bundleQemu = Join-Path $QemuDir "qemu-system-aarch64.exe"
+        if ((Test-Path $repoQemu) -and ((-not (Test-Path $bundleQemu)) -or ((Get-Item $repoQemu).LastWriteTime -gt (Get-Item $bundleQemu).LastWriteTime))) {
+            $QemuPath = $repoQemu
+        } else {
+            $QemuPath = $bundleQemu
+        }
+    }
+    $pathAdditions = @($QemuDir, "C:\msys64\clangarm64\bin")
 }
 else {
     if (-not $QemuPath) { $QemuPath = Join-Path $GfxDir "qemu\build\qemu-system-aarch64.exe" }
@@ -100,13 +108,8 @@ $env:ANDROID_EMU_VK_SELECT_GPU = "1"
 # if (Test-Path $NewIcd) { $env:VK_DRIVER_FILES = $NewIcd }
 
 # ------------------------------------------------- binary/display resolver --
-# The repo-local custom QEMU was built --disable-gtk --disable-sdl
-# --disable-vnc: its only usable backend is 'none' (headless). Windowed
-# modes must ride the stock msys2 binary, which lacks rutabaga -> GPU falls
-# back to basic. Resolve that here instead of failing with QEMU's cryptic
-# "Parameter 'type' does not accept value 'sdl'".
-$MsysQemu = "C:\msys64\clangarm64\bin\qemu-system-aarch64.exe"
-
+# The repo-local custom QEMU in tools\qemu-gfxstream\qemu\build supports
+# headless (none), VNC (embedded), and SDL (native window).
 function Get-QemuDisplayCaps {
     param([string]$Exe)
     $help = (& $Exe -display help 2>&1 | Out-String)
@@ -114,10 +117,7 @@ function Get-QemuDisplayCaps {
     foreach ($line in ($help -split "`n")) {
         if ($line -match '^\s*([a-z][a-z0-9-]+)\s*$') { $types += $Matches[1] }
     }
-    # QEMU's -display help does NOT list 'vnc' even when VNC is compiled in
-    # (VNC is registered as a display backend at runtime differently from
-    # sdl/gtk). Detect it via the legacy -vnc option instead.
-    if ($types.Count -eq 0) { $types = @("none") }   # custom minimal build
+    if ($types.Count -eq 0) { $types = @("none") }
     if ((-not $types.Contains("vnc"))) {
         $vncHelp = (& $Exe -vnc help 2>&1 | Out-String)
         if ($vncHelp -match "vnc|display") { $types += "vnc" }
@@ -135,20 +135,12 @@ $reqType  = switch -Regex ($DisplayMode) {
             }
 
 if ($reqType -ne "none" -and $caps -notcontains $reqType) {
-    $msysCaps = @()
-    if (Test-Path $MsysQemu) { $msysCaps = Get-QemuDisplayCaps -Exe $MsysQemu }
-    if ($msysCaps -contains $reqType) {
-        Write-Host "[launch] '$reqType' needs the stock msys2 QEMU (custom build is headless-only)." -ForegroundColor Yellow
-        Write-Host "[launch] Switching binary; GPU falls back to basic (no rutabaga in msys2)." -ForegroundColor Yellow
-        $QemuPath = $MsysQemu
-        $GpuMode  = "basic"
-    }
-    elseif ($reqType -eq "vnc") {
-        Write-Host "[launch] WARNING: no installed QEMU supports vnc; degrading DisplayMode to none." -ForegroundColor Yellow
+    if ($reqType -eq "vnc") {
+        Write-Host "[launch] WARNING: QEMU does not support vnc; degrading DisplayMode to none." -ForegroundColor Yellow
         $DisplayMode = "none"
     }
     else {
-        Write-Error "Requested display '$reqType' unsupported by $QemuPath and fallback unavailable."
+        Write-Error "Requested display '$reqType' unsupported by custom QEMU at $QemuPath."
     }
 }
 

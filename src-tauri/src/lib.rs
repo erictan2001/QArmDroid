@@ -49,21 +49,66 @@ fn silent_command(program: impl AsRef<std::ffi::OsStr>) -> Command {
     cmd
 }
 
-/// Locate adb executable: prefer C:\platform-tools\adb.exe or bundled scrcpy\adb.exe, fallback to system PATH "adb"
-fn adb_cmd() -> Command {
-    let adb_path: PathBuf = if Path::new(r"C:\platform-tools\adb.exe").exists() {
-        PathBuf::from(r"C:\platform-tools\adb.exe")
-    } else if let Ok(repo_root) = find_repo_root() {
+/// Locate adb executable: prefer runtime scrcpy/adb.exe, repo tools/scrcpy/adb.exe, or system PATH
+fn get_adb_path() -> PathBuf {
+    if Path::new(r"C:\platform-tools\adb.exe").exists() {
+        return PathBuf::from(r"C:\platform-tools\adb.exe");
+    }
+    let candidates = vec![
+        runtime_root().join("scrcpy").join("adb.exe"),
+        runtime_root().join("tools").join("scrcpy").join("adb.exe"),
+    ];
+    for p in candidates {
+        if p.exists() {
+            return p;
+        }
+    }
+    if let Ok(repo_root) = find_repo_root() {
         let scrcpy_adb = repo_root.join("tools").join("scrcpy").join("adb.exe");
         if scrcpy_adb.exists() {
-            scrcpy_adb
-        } else {
-            PathBuf::from("adb")
+            return scrcpy_adb;
         }
-    } else {
-        PathBuf::from("adb")
-    };
-    silent_command(adb_path)
+    }
+    if let Some(res) = install_resources() {
+        let scrcpy_adb = res.join("scrcpy").join("adb.exe");
+        if scrcpy_adb.exists() {
+            return scrcpy_adb;
+        }
+    }
+    PathBuf::from("adb")
+}
+
+fn adb_cmd() -> Command {
+    silent_command(get_adb_path())
+}
+
+/// Locate scrcpy executable and its working directory.
+fn get_scrcpy_paths() -> Option<(PathBuf, PathBuf)> {
+    let candidates = vec![
+        runtime_root().join("scrcpy"),
+        runtime_root().join("tools").join("scrcpy"),
+    ];
+    for dir in candidates {
+        let exe = dir.join("scrcpy.exe");
+        if exe.exists() {
+            return Some((exe, dir));
+        }
+    }
+    if let Ok(repo_root) = find_repo_root() {
+        let dir = repo_root.join("tools").join("scrcpy");
+        let exe = dir.join("scrcpy.exe");
+        if exe.exists() {
+            return Some((exe, dir));
+        }
+    }
+    if let Some(res) = install_resources() {
+        let dir = res.join("scrcpy");
+        let exe = dir.join("scrcpy.exe");
+        if exe.exists() {
+            return Some((exe, dir));
+        }
+    }
+    None
 }
 
 /// Run a command and capture output, killing it if it exceeds `timeout`.
@@ -136,8 +181,8 @@ struct ProvisionProgress {
     error: bool,
 }
 
-/// Persisted image configuration (mirrors tools/provision_bundle.ps1 output
-/// of image_config.json). Returned to the UI so it can prefill the setup form.
+/// Persisted image configuration and runtime component status.
+/// Returned to the UI for the Settings / Setup view.
 #[derive(Serialize, Clone, Debug)]
 struct ImageConfig {
     installed: bool,
@@ -145,6 +190,20 @@ struct ImageConfig {
     disk_size_gb: u32,
     fs_format: String,
     runtime_root: String,
+    qemu_present: bool,
+    qemu_path: String,
+    scrcpy_present: bool,
+    scrcpy_path: String,
+    adb_present: bool,
+    adb_path: String,
+    python_present: bool,
+    kernel_present: bool,
+    super_present: bool,
+    disk_present: bool,
+    cores: u32,
+    memory_gb: u32,
+    gpu_mode: String,
+    close_on_exit: bool,
 }
 
 /// Resolve the writable runtime root where the bundled install provisions
@@ -174,30 +233,105 @@ fn install_resources() -> Option<PathBuf> {
     })
 }
 
-/// Read the persisted image_config.json (written by provision_bundle.ps1).
+/// Read the persisted image_config.json and scan runtime tool presence.
 fn read_image_config() -> ImageConfig {
     let rt = runtime_root();
     let disk = rt.join("image").join("disk.raw");
-    // "installed" = the app's immutable resources ship next to the exe (a real
-    // bundled install). This is independent of whether provisioning has run.
     let installed = install_resources().is_some() || rt.exists();
-    // "provisioned" = ground truth: the built disk.raw exists. We do NOT trust
-    // the config flag, which can be left stale after a failed build.
     let provisioned = disk.exists();
 
-    let mut disk_size_gb = 8u32;
+    let mut disk_size_gb = 16u32;
     let mut fs_format = "ext4".to_string();
+    let mut cores = 6u32;
+    let mut memory_gb = 6u32;
+    let mut gpu_mode = "basic".to_string();
+    let mut close_on_exit = true;
 
     let cfg_path = rt.join("image_config.json");
     if let Ok(contents) = fs::read_to_string(&cfg_path) {
-        // Minimal JSON parse without an external crate dependency churn.
         if let Some(v) = extract_json_string(&contents, "userdata_fs") {
             fs_format = v;
         }
         if let Some(v) = extract_json_u32(&contents, "userdata_size_gb") {
             disk_size_gb = v;
         }
+        if let Some(v) = extract_json_u32(&contents, "cores") {
+            cores = v;
+        }
+        if let Some(v) = extract_json_u32(&contents, "memory_gb") {
+            memory_gb = v;
+        }
+        if let Some(v) = extract_json_string(&contents, "gpu_mode") {
+            gpu_mode = v;
+        }
+        if let Some(v) = extract_json_bool(&contents, "close_on_exit") {
+            close_on_exit = v;
+        }
     }
+
+    let repo_root_opt = find_repo_root().ok();
+
+    // Locate QEMU
+    let mut qemu_present = false;
+    let mut qemu_path = String::new();
+    let qemu_candidates = vec![
+        if let Some(ref r) = repo_root_opt {
+            r.join("tools").join("qemu-gfxstream").join("qemu").join("build").join("qemu-system-aarch64.exe")
+        } else {
+            PathBuf::new()
+        },
+        rt.join("qemu").join("qemu-system-aarch64.exe"),
+    ];
+    for p in qemu_candidates {
+        if p.exists() {
+            qemu_present = true;
+            qemu_path = p.to_string_lossy().to_string();
+            break;
+        }
+    }
+    if !qemu_present {
+        if let Some(res) = install_resources() {
+            let p = res.join("qemu").join("qemu-system-aarch64.exe");
+            if p.exists() {
+                qemu_present = true;
+                qemu_path = p.to_string_lossy().to_string();
+            }
+        }
+    }
+
+    // Locate Scrcpy
+    let (scrcpy_present, scrcpy_path) = match get_scrcpy_paths() {
+        Some((exe, _)) => (true, exe.to_string_lossy().to_string()),
+        None => (false, String::new()),
+    };
+
+    // Locate ADB
+    let adb_p = get_adb_path();
+    let adb_present = adb_p.exists();
+    let adb_path = adb_p.to_string_lossy().to_string();
+
+    // Python
+    let python_candidates = vec![
+        rt.join("python").join("python.exe"),
+        if let Some(ref r) = repo_root_opt {
+            r.join("python").join("python.exe")
+        } else {
+            PathBuf::new()
+        },
+    ];
+    let python_present = python_candidates.iter().any(|p| p.exists()) ||
+        install_resources().map_or(false, |r| r.join("python").join("python.exe").exists());
+
+    // Image files
+    let kernel_present = rt.join("image").join("kernel").exists() ||
+        repo_root_opt.as_ref().map_or(false, |r| r.join("aosp_cf_arm64_only_phone-img").join("out").join("kernel").exists()) ||
+        install_resources().map_or(false, |r| r.join("image").join("kernel").exists());
+
+    let super_present = rt.join("image").join("super.img").exists() ||
+        repo_root_opt.as_ref().map_or(false, |r| r.join("aosp_cf_arm64_only_phone-img").join("super.img").exists()) ||
+        install_resources().map_or(false, |r| r.join("image").join("super.img").exists());
+
+    let disk_present = disk.exists();
 
     ImageConfig {
         installed,
@@ -205,6 +339,20 @@ fn read_image_config() -> ImageConfig {
         disk_size_gb,
         fs_format,
         runtime_root: rt.to_string_lossy().to_string(),
+        qemu_present,
+        qemu_path,
+        scrcpy_present,
+        scrcpy_path,
+        adb_present,
+        adb_path,
+        python_present,
+        kernel_present,
+        super_present,
+        disk_present,
+        cores,
+        memory_gb,
+        gpu_mode,
+        close_on_exit,
     }
 }
 
@@ -421,7 +569,7 @@ fn find_repo_root() -> Result<PathBuf, String> {
 
 #[tauri::command]
 fn start_emulator(display_mode: Option<String>) -> Result<String, String> {
-    if is_port_open(5901, 50) || is_port_open(5555, 50) {
+    if is_qemu_process_running() || is_port_open(5901, 50) || is_port_open(5555, 50) {
         return Ok("Emulator is already running.".to_string());
     }
 
@@ -519,6 +667,8 @@ fn start_emulator_with(
         .to_str()
         .ok_or_else(|| "Failed to convert script path to string".to_string())?;
 
+    let cfg = read_image_config();
+
     let mut args = vec![
         "-NoProfile".to_string(),
         "-ExecutionPolicy".to_string(),
@@ -527,15 +677,21 @@ fn start_emulator_with(
         script_str.to_string(),
         "-DisplayMode".to_string(),
         qemu_mode.to_string(),
+        "-BundleRoot".to_string(),
+        bundle_root.to_str().unwrap_or("").to_string(),
+        "-Cores".to_string(),
+        cfg.cores.to_string(),
+        "-Memory".to_string(),
+        format!("{}G", cfg.memory_gb),
+        "-GpuMode".to_string(),
+        cfg.gpu_mode.clone(),
     ];
-    args.push("-BundleRoot".to_string());
-    args.push(bundle_root.to_str().unwrap_or("").to_string());
 
     // SDL shows the virtio-gpu framebuffer directly (no VNC/scrcpy encoder
     // in between). With the default minigbm gralloc the scanout is BGR ->
     // red/blue look swapped in the native window. Switching to the CPU
     // gralloc ('default') produces an RGB scanout, fixing the swap.
-    if qemu_mode == "sdl" {
+    if qemu_mode == "sdl" && cfg.gpu_mode == "basic" {
         args.push("-GrallockOverride".to_string());
         args.push("default".to_string());
     }
@@ -570,11 +726,8 @@ static SCRCPY_PROCESS: Mutex<Option<Child>> = Mutex::new(None);
 
 #[tauri::command]
 fn launch_scrcpy() -> Result<String, String> {
-    let repo_root = find_repo_root()?;
-    let scrcpy_exe = repo_root.join("tools").join("scrcpy").join("scrcpy.exe");
-    if !scrcpy_exe.exists() {
-        return Err(format!("scrcpy.exe not found at {:?}", scrcpy_exe));
-    }
+    let (scrcpy_exe, scrcpy_dir) = get_scrcpy_paths()
+        .ok_or_else(|| "scrcpy.exe not found in runtime or tools directory".to_string())?;
 
     let mut lock = SCRCPY_PROCESS.lock().unwrap();
     if let Some(ref mut child) = *lock {
@@ -583,7 +736,6 @@ fn launch_scrcpy() -> Result<String, String> {
         }
     }
 
-    let scrcpy_dir = repo_root.join("tools").join("scrcpy");
     let scrcpy_server = scrcpy_dir.join("scrcpy-server");
 
     // Ensure adb connection is established
@@ -649,12 +801,26 @@ fn is_port_open(port: u16, timeout_ms: u64) -> bool {
     TcpStream::connect_timeout(&addr, Duration::from_millis(timeout_ms)).is_ok()
 }
 
+fn is_qemu_process_running() -> bool {
+    #[cfg(windows)]
+    {
+        let out = silent_command("tasklist")
+            .args(&["/FI", "IMAGENAME eq qemu-system-aarch64.exe", "/NH"])
+            .output();
+        if let Ok(o) = out {
+            let s = String::from_utf8_lossy(&o.stdout);
+            return s.contains("qemu-system-aarch64.exe");
+        }
+    }
+    false
+}
+
 #[tauri::command]
 fn get_emulator_status() -> EmulatorStatus {
     let vnc_ready = is_port_open(5901, 30);
     let port_5555 = is_port_open(5555, 30);
     let daemon_ready = is_port_open(6666, 30);
-    let running = vnc_ready || port_5555 || daemon_ready;
+    let running = vnc_ready || port_5555 || daemon_ready || is_qemu_process_running();
 
     let mut adb_ready = false;
     let mut boot_completed = false;
@@ -867,7 +1033,14 @@ fn get_image_config() -> ImageConfig {
 }
 
 #[tauri::command]
-fn save_image_config(disk_size_gb: u32, fs_format: String) -> Result<ImageConfig, String> {
+fn save_image_config(
+    disk_size_gb: u32,
+    fs_format: String,
+    cores: Option<u32>,
+    memory_gb: Option<u32>,
+    gpu_mode: Option<String>,
+    close_on_exit: Option<bool>,
+) -> Result<ImageConfig, String> {
     let rt = runtime_root();
     let cfg_path = rt.join("image_config.json");
     let mut cfg_provisioned = false;
@@ -876,10 +1049,14 @@ fn save_image_config(disk_size_gb: u32, fs_format: String) -> Result<ImageConfig
             cfg_provisioned = v;
         }
     }
-    // Only update the user-editable preferences; keep provisioned flag.
+    let cores_val = cores.unwrap_or(6).clamp(1, 32);
+    let mem_val = memory_gb.unwrap_or(6).clamp(2, 64);
+    let gpu_val = gpu_mode.unwrap_or_else(|| "basic".to_string());
+    let close_val = close_on_exit.unwrap_or(true);
+
     let json = format!(
-        "{{\"userdata_size_gb\":{},\"userdata_fs\":\"{}\",\"provisioned\":{}}}",
-        disk_size_gb, fs_format, cfg_provisioned
+        "{{\"userdata_size_gb\":{},\"userdata_fs\":\"{}\",\"cores\":{},\"memory_gb\":{},\"gpu_mode\":\"{}\",\"close_on_exit\":{},\"provisioned\":{}}}",
+        disk_size_gb, fs_format, cores_val, mem_val, gpu_val, close_val, cfg_provisioned
     );
     if let Some(parent) = cfg_path.parent() {
         let _ = fs::create_dir_all(parent);
@@ -888,12 +1065,35 @@ fn save_image_config(disk_size_gb: u32, fs_format: String) -> Result<ImageConfig
     Ok(read_image_config())
 }
 
+#[tauri::command]
+fn open_runtime_folder() -> Result<(), String> {
+    let rt = runtime_root();
+    if !rt.exists() {
+        let _ = fs::create_dir_all(&rt);
+    }
+    silent_command("explorer.exe")
+        .arg(&rt)
+        .spawn()
+        .map_err(|e| format!("Failed to open directory: {}", e))?;
+    Ok(())
+}
+
 /// Run the provisioning script to completion on a BACKGROUND thread so the
 /// UI stays responsive (the disk build can take 10-20 minutes). Progress is
 /// streamed to the frontend via `provision-progress` events. Returns
 /// immediately with a startup message; the UI tracks lifecycle via events.
 #[tauri::command]
-async fn provision_image(app: tauri::AppHandle, force: Option<bool>, disk_size_gb: Option<u32>, fs_format: Option<String>) -> Result<String, String> {
+async fn provision_image(
+    app: tauri::AppHandle,
+    force: Option<bool>,
+    rebuild_disk: Option<bool>,
+    disk_size_gb: Option<u32>,
+    fs_format: Option<String>,
+) -> Result<String, String> {
+    if is_qemu_process_running() || is_port_open(5901, 30) || is_port_open(5555, 30) || is_port_open(6666, 30) {
+        return Err("Cannot rebuild or provision disk while the emulator is running. Please stop the emulator first.".to_string());
+    }
+
     // Refuse concurrent runs.
     {
         let mut lock = PROVISIONING.lock().unwrap();
@@ -904,36 +1104,40 @@ async fn provision_image(app: tauri::AppHandle, force: Option<bool>, disk_size_g
     }
 
     let rt = runtime_root();
-    let runtime_provision = rt.join("tools").join("provision_bundle.ps1");
-    // Prefer the runtime tools copy; fall back to the immutable install
-    // resources tools dir (used on a fresh runtime before the first
-    // provisioning has copied scripts into %LOCALAPPDATA%\QArmDroid\tools),
-    // then to the dev repo root.
-    let provision_script = if runtime_provision.exists() {
-        runtime_provision
-    } else if let Some(inst) = install_resources() {
-        let from_inst = inst.join("tools").join("provision_bundle.ps1");
-        if from_inst.exists() {
-            from_inst
-        } else {
-            match find_repo_root() {
-                Ok(r) => r.join("tools").join("provision_bundle.ps1"),
-                Err(_) => runtime_provision,
-            }
-        }
+    let repo_root_opt = find_repo_root().ok();
+    let inst_opt = install_resources();
+
+    let tools_src_dir = if let Some(ref r) = repo_root_opt {
+        let p = r.join("tools");
+        if p.exists() { Some(p) } else { None }
+    } else if let Some(ref inst) = inst_opt {
+        let p = inst.join("tools");
+        if p.exists() { Some(p) } else { None }
     } else {
-        match find_repo_root() {
-            Ok(r) => r.join("tools").join("provision_bundle.ps1"),
-            Err(_) => runtime_provision,
-        }
+        None
     };
 
+    let rt_tools = rt.join("tools");
+    let _ = fs::create_dir_all(&rt_tools);
+
+    // Keep scripts synchronized into runtime tools so they are never stale
+    if let Some(ref src) = tools_src_dir {
+        for name in &["provision_bundle.ps1", "m0_build.py", "imgtools.py", "launch.ps1"] {
+            let src_file = src.join(name);
+            if src_file.exists() {
+                let _ = fs::copy(&src_file, rt_tools.join(name));
+            }
+        }
+    }
+
+    let provision_script = rt_tools.join("provision_bundle.ps1");
     if !provision_script.exists() {
         *PROVISIONING.lock().unwrap() = false;
         return Err(format!("provision_bundle.ps1 not found at {:?}", provision_script));
     }
 
     let force = force.unwrap_or(false);
+    let rebuild = rebuild_disk.unwrap_or(false) || force;
     let gb = disk_size_gb.unwrap_or(8).clamp(4, 256);
     let fs = fs_format.unwrap_or_else(|| "ext4".to_string());
     let fs = if fs == "f2fs" { "f2fs" } else { "ext4" };
@@ -960,6 +1164,9 @@ async fn provision_image(app: tauri::AppHandle, force: Option<bool>, disk_size_g
     }
     if force {
         args.push("-Force".to_string());
+    }
+    if rebuild {
+        args.push("-RebuildDisk".to_string());
     }
 
     let app2 = app.clone();
@@ -1066,6 +1273,14 @@ async fn provision_image(app: tauri::AppHandle, force: Option<bool>, disk_size_g
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .on_window_event(|_window, event| {
+            if let tauri::WindowEvent::CloseRequested { .. } = event {
+                let cfg = read_image_config();
+                if cfg.close_on_exit {
+                    let _ = stop_emulator();
+                }
+            }
+        })
         .setup(|_app| {
             Ok(())
         })
@@ -1086,7 +1301,8 @@ pub fn run() {
             optimize_performance,
             get_image_config,
             save_image_config,
-            provision_image
+            provision_image,
+            open_runtime_folder
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

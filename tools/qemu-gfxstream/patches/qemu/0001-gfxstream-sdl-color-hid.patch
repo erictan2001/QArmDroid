@@ -177,10 +177,32 @@ index d4b9017..1dce33b 100644
 +}
 \ No newline at end of file
 diff --git a/ui/sdl2-2d.c b/ui/sdl2-2d.c
-index 7305238..794c96c 100644
+index 7305238..5fc1fd2 100644
 --- a/ui/sdl2-2d.c
 +++ b/ui/sdl2-2d.c
-@@ -48,9 +48,37 @@ void sdl2_2d_update(DisplayChangeListener *dcl,
+@@ -28,6 +28,21 @@
+ #include "ui/input.h"
+ #include "ui/sdl2.h"
+ 
++static bool qemu_console_is_rutabaga(QemuConsole *con)
++{
++    if (!con) {
++        return false;
++    }
++    char *label = qemu_console_get_label(con);
++    if (!label) {
++        return false;
++    }
++    bool is_rut = (strstr(label, "rutabaga") != NULL ||
++                   strstr(label, "gfxstream") != NULL);
++    g_free(label);
++    return is_rut;
++}
++
+ void sdl2_2d_update(DisplayChangeListener *dcl,
+                     int x, int y, int w, int h)
+ {
+@@ -48,9 +63,38 @@ void sdl2_2d_update(DisplayChangeListener *dcl,
      rect.w = w;
      rect.h = h;
  
@@ -189,9 +211,10 @@ index 7305238..794c96c 100644
 -                      surface_stride(surf));
 +    /* ARM64 LE: swap R/B bytes into a TEMP buffer before SDL upload.
 +     * Only valid when surface bpp == 4 (XRGB/BGRA 32-bit layout).
-+     * gfxstream-presented frames may use other formats/bpp, so gate
-+     * on 4 bytes-per-pixel to avoid overrun/misinterpretation. */
-+    if (surface_bytes_per_pixel(surf) == 4) {
++     * ONLY perform this swap for basic GPU mode (plain virtio-gpu).
++     * In gfxstream/rutabaga mode, the framebuffer is already in the
++     * correct channel order; swapping here turns black (0xFF alpha) into deep blue. */
++    if (!qemu_console_is_rutabaga(scon->dcl.con) && surface_bytes_per_pixel(surf) == 4) {
 +        static uint8_t *swap_buf = NULL;
 +        static size_t swap_buf_size = 0;
 +        size_t needed = (size_t)surface_stride(surf) * h;
@@ -221,25 +244,23 @@ index 7305238..794c96c 100644
      SDL_RenderClear(scon->real_renderer);
      SDL_RenderCopy(scon->real_renderer, scon->texture, NULL, NULL);
      SDL_RenderPresent(scon->real_renderer);
-@@ -102,7 +130,10 @@ void sdl2_2d_switch(DisplayChangeListener *dcl,
+@@ -102,7 +146,14 @@ void sdl2_2d_switch(DisplayChangeListener *dcl,
          break;
      case PIXMAN_a8b8g8r8:
      case PIXMAN_x8b8g8r8:
 -        format = SDL_PIXELFORMAT_ABGR8888;
-+        /* ARM64 LE FIX: pixman 0x20020888 (=x8b8g8r8 on LE) contains
-+         * guest data B,G,R,A. ABGR8888 would read byte0 as Red (wrong).
-+         * BGRA8888 reads byte0 as Blue (correct!) */
-+        format = SDL_PIXELFORMAT_BGRA8888; fprintf(stderr, "CASE_HIT: a8b8g8r8/x8b8g8r8 -> BGRA\n");
++        if (!qemu_console_is_rutabaga(scon->dcl.con)) {
++            /* ARM64 LE FIX for basic virtio-gpu: pixman 0x20020888 (=x8b8g8r8 on LE)
++             * contains guest data B,G,R,A. BGRA8888 reads byte0 as Blue. */
++            format = SDL_PIXELFORMAT_BGRA8888;
++        } else {
++            /* gfxstream: upstream native format */
++            format = SDL_PIXELFORMAT_ABGR8888;
++        }
          break;
      case PIXMAN_r8g8b8a8:
      case PIXMAN_r8g8b8x8:
-@@ -112,11 +143,14 @@ void sdl2_2d_switch(DisplayChangeListener *dcl,
-         format = SDL_PIXELFORMAT_BGRX8888;
-         break;
-     case PIXMAN_b8g8r8a8:
--        format = SDL_PIXELFORMAT_BGRA8888;
-+        format = SDL_PIXELFORMAT_BGRA8888; fprintf(stderr, "CASE_HIT: a8b8g8r8/x8b8g8r8 -> BGRA\n");
-         break;
+@@ -117,6 +168,9 @@ void sdl2_2d_switch(DisplayChangeListener *dcl,
      default:
          g_assert_not_reached();
      }
@@ -302,7 +323,7 @@ index bb066cd..0dd2cc8 100644
  
      SDL_GL_SwapWindow(scon->real_window);
 diff --git a/ui/sdl2.c b/ui/sdl2.c
-index aaaede5..2f4d2e2 100644
+index aaaede5..7721c47 100644
 --- a/ui/sdl2.c
 +++ b/ui/sdl2.c
 @@ -38,6 +38,7 @@
@@ -313,7 +334,169 @@ index aaaede5..2f4d2e2 100644
  
  static int sdl2_num_outputs;
  static struct sdl2_console *sdl2_console;
-@@ -249,6 +250,10 @@ static void sdl_show_cursor(struct sdl2_console *scon)
+@@ -52,9 +53,12 @@ static int gui_fullscreen;
+ static int gui_grab_code = KMOD_LALT | KMOD_LCTRL;
+ static SDL_Cursor *sdl_cursor_normal;
+ static SDL_Cursor *sdl_cursor_hidden;
++static SDL_Cursor *sdl_cursor_blue_dot;
++static SDL_Cursor *sdl_cursor_blue_dot_active;
+ static int absolute_enabled;
+ static bool guest_cursor;
+ static int guest_x, guest_y;
++
+ static SDL_Cursor *guest_sprite;
+ static Notifier mouse_mode_notifier;
+ 
+@@ -68,6 +72,7 @@ static Notifier mouse_mode_notifier;
+ #endif
+ 
+ static void sdl_update_caption(struct sdl2_console *scon);
++static void sdl_show_cursor(struct sdl2_console *scon);
+ 
+ static struct sdl2_console *get_scon_from_window(uint32_t window_id)
+ {
+@@ -129,6 +134,11 @@ void sdl2_window_create(struct sdl2_console *scon)
+     qemu_egl_display = eglGetCurrentDisplay();
+ #endif
+ 
++    if (sdl_cursor_blue_dot) {
++        SDL_SetCursor(sdl_cursor_blue_dot);
++    }
++    SDL_ShowCursor(SDL_ENABLE);
++
+     sdl_update_caption(scon);
+ }
+ 
+@@ -212,12 +222,99 @@ static void sdl_update_caption(struct sdl2_console *scon)
+     }
+ }
+ 
++static SDL_Cursor *sdl2_create_touch_cursor(int size, int active)
++{
++    int hot = size / 2;
++    float cx = (float)size / 2.0f;
++    float cy = (float)size / 2.0f;
++    float r_glow = (float)size / 2.0f;
++    float r_ring_outer = r_glow - 1.2f;
++    float r_ring_inner = r_ring_outer - 2.0f;
++
++    SDL_Surface *surf = SDL_CreateRGBSurfaceWithFormat(0, size, size, 32,
++                                                       SDL_PIXELFORMAT_ARGB8888);
++    if (!surf) {
++        return NULL;
++    }
++
++    uint32_t *pixels = (uint32_t *)surf->pixels;
++
++    for (int y = 0; y < size; y++) {
++        for (int x = 0; x < size; x++) {
++            float px = (float)x + 0.5f - cx;
++            float py = (float)y + 0.5f - cy;
++            float dist = hypotf(px, py);
++
++            if (dist >= r_glow) {
++                pixels[y * size + x] = 0;
++                continue;
++            }
++
++            float r = 0, g = 0, b = 0, a = 0;
++
++            if (dist > r_ring_outer) {
++                float t = (r_glow - dist) / (r_glow - r_ring_outer);
++                if (t < 0.0f) {
++                    t = 0.0f;
++                } else if (t > 1.0f) {
++                    t = 1.0f;
++                }
++                r = 59.0f;
++                g = 130.0f;
++                b = 246.0f;
++                a = (active ? 200.0f : 150.0f) * t * t;
++            } else if (dist >= r_ring_inner) {
++                r = 255.0f;
++                g = 255.0f;
++                b = 255.0f;
++                a = 245.0f;
++            } else {
++                float edge_dist = r_ring_inner - dist;
++                if (edge_dist < 0.8f) {
++                    float t = edge_dist / 0.8f;
++                    r = (1.0f - t) * 255.0f + t * 59.0f;
++                    g = (1.0f - t) * 255.0f + t * 130.0f;
++                    b = (1.0f - t) * 255.0f + t * 246.0f;
++                    a = (1.0f - t) * 245.0f + t * (active ? 180.0f : 140.0f);
++                } else {
++                    r = 59.0f;
++                    g = 130.0f;
++                    b = 246.0f;
++                    a = active ? 180.0f : 140.0f;
++                }
++            }
++
++            /* Windows DWM requires premultiplied alpha for color cursors */
++            float alpha_f = a / 255.0f;
++            uint32_t ur = (uint32_t)(r * alpha_f + 0.5f);
++            uint32_t ug = (uint32_t)(g * alpha_f + 0.5f);
++            uint32_t ub = (uint32_t)(b * alpha_f + 0.5f);
++            uint32_t ua = (uint32_t)(a + 0.5f);
++            if (ur > ua) { ur = ua; }
++            if (ug > ua) { ug = ua; }
++            if (ub > ua) { ub = ua; }
++
++            pixels[y * size + x] = (ua << 24) | (ur << 16) | (ug << 8) | ub;
++        }
++    }
++
++    SDL_Cursor *cursor = SDL_CreateColorCursor(surf, hot, hot);
++    SDL_FreeSurface(surf);
++    return cursor;
++}
++
+ static void sdl_hide_cursor(struct sdl2_console *scon)
+ {
+     if (scon->opts->has_show_cursor && scon->opts->show_cursor) {
+         return;
+     }
+ 
++    /* Never hide the cursor when an absolute pointing device (tablet) is active */
++    if (qemu_input_is_absolute(scon->dcl.con) || absolute_enabled) {
++        sdl_show_cursor(scon);
++        return;
++    }
++
+     SDL_ShowCursor(SDL_DISABLE);
+     SDL_SetCursor(sdl_cursor_hidden);
+ 
+@@ -228,17 +325,24 @@ static void sdl_hide_cursor(struct sdl2_console *scon)
+ 
+ static void sdl_show_cursor(struct sdl2_console *scon)
+ {
+-    if (scon->opts->has_show_cursor && scon->opts->show_cursor) {
++    if (scon->opts->has_show_cursor && !scon->opts->show_cursor) {
+         return;
+     }
+ 
+-    if (!qemu_input_is_absolute(scon->dcl.con)) {
++    if (!gui_grab && !qemu_input_is_absolute(scon->dcl.con) && !absolute_enabled) {
++        return;
++    }
++
++    if (!qemu_input_is_absolute(scon->dcl.con) && !absolute_enabled) {
+         SDL_SetRelativeMouseMode(SDL_FALSE);
+     }
+ 
+-    if (guest_cursor &&
+-        (gui_grab || qemu_input_is_absolute(scon->dcl.con) || absolute_enabled)) {
++    if (guest_cursor && guest_sprite) {
+         SDL_SetCursor(guest_sprite);
++    } else if (qemu_input_is_absolute(scon->dcl.con) || absolute_enabled) {
++        if (sdl_cursor_blue_dot) {
++            SDL_SetCursor(sdl_cursor_blue_dot);
++        }
+     } else {
+         SDL_SetCursor(sdl_cursor_normal);
+     }
+@@ -249,6 +353,10 @@ static void sdl_show_cursor(struct sdl2_console *scon)
  static void sdl_grab_start(struct sdl2_console *scon)
  {
      QemuConsole *con = scon ? scon->dcl.con : NULL;
@@ -324,8 +507,12 @@ index aaaede5..2f4d2e2 100644
  
      if (!con || !qemu_console_is_graphic(con)) {
          return;
-@@ -264,7 +269,27 @@ static void sdl_grab_start(struct sdl2_console *scon)
-     if (guest_cursor) {
+@@ -261,11 +369,29 @@ static void sdl_grab_start(struct sdl2_console *scon)
+     if (!(SDL_GetWindowFlags(scon->real_window) & SDL_WINDOW_INPUT_FOCUS)) {
+         return;
+     }
+-    if (guest_cursor) {
++    if (guest_cursor && guest_sprite) {
          SDL_SetCursor(guest_sprite);
          if (!qemu_input_is_absolute(scon->dcl.con) && !absolute_enabled) {
 -            SDL_WarpMouseInWindow(scon->real_window, guest_x, guest_y);
@@ -336,24 +523,23 @@ index aaaede5..2f4d2e2 100644
 +            sdl2_compute_letterbox(scr_w, scr_h, surf_w, surf_h,
 +                                   &scale, &render_w, &render_h,
 +                                   &off_x, &off_y);
-+            /* GL Y-flip handling for cursor warping (guest→window):
-+             * - Scanout mode: egl_fb_blit uses flip = !y0_top.
-+             *   When y0_top=false (guest Y=0 at bottom), the blit flips so that
-+             *   guest Y=0 appears at window top. Warping uses same mapping:
-+             *   guest Y=0 → window top (off_y). NO flip needed.
-+             * - Normal GL mode: NO flip, direct mapping. */
 +#ifdef CONFIG_OPENGL
-+            /* No Y-flip needed for either mode - both render with guest Y=0 at window top */
 +            wy = (int)floor(guest_y * scale + off_y + 0.5);
 +#else
 +            wy = (int)floor(guest_y * scale + off_y + 0.5);
 +#endif
 +            wx = (int)floor(guest_x * scale + off_x + 0.5);
 +            SDL_WarpMouseInWindow(scon->real_window, wx, wy);
++        }
++    } else if (qemu_input_is_absolute(scon->dcl.con) || absolute_enabled) {
++        if (sdl_cursor_blue_dot) {
++            SDL_SetCursor(sdl_cursor_blue_dot);
          }
++        SDL_ShowCursor(SDL_ENABLE);
      } else {
          sdl_hide_cursor(scon);
-@@ -310,6 +335,36 @@ static void sdl_mouse_mode_change(Notifier *notify, void *data)
+     }
+@@ -310,6 +436,36 @@ static void sdl_mouse_mode_change(Notifier *notify, void *data)
      }
  }
  
@@ -390,7 +576,7 @@ index aaaede5..2f4d2e2 100644
  static void sdl_send_mouse_event(struct sdl2_console *scon, int dx, int dy,
                                   int x, int y, int state)
  {
-@@ -333,13 +388,27 @@ static void sdl_send_mouse_event(struct sdl2_console *scon, int dx, int dy,
+@@ -333,13 +489,27 @@ static void sdl_send_mouse_event(struct sdl2_console *scon, int dx, int dy,
          qemu_input_queue_abs(scon->dcl.con, INPUT_AXIS_Y,
                               y, 0, surface_height(scon->surface));
      } else {
@@ -424,7 +610,7 @@ index aaaede5..2f4d2e2 100644
          }
          qemu_input_queue_rel(scon->dcl.con, INPUT_AXIS_X, dx);
          qemu_input_queue_rel(scon->dcl.con, INPUT_AXIS_Y, dy);
-@@ -498,18 +567,22 @@ static void handle_mousemotion(SDL_Event *ev)
+@@ -498,32 +668,73 @@ static void handle_mousemotion(SDL_Event *ev)
      int max_x, max_y;
      struct sdl2_console *scon = get_scon_from_window(ev->motion.windowID);
      int scr_w, scr_h, surf_w, surf_h, x, y, dx, dy;
@@ -436,31 +622,39 @@ index aaaede5..2f4d2e2 100644
      }
  
      SDL_GetWindowSize(scon->real_window, &scr_w, &scr_h);
-+    surf_w = surface_width(scon->surface);
-+    surf_h = surface_height(scon->surface);
-     if (qemu_input_is_absolute(scon->dcl.con) || absolute_enabled) {
+-    if (qemu_input_is_absolute(scon->dcl.con) || absolute_enabled) {
 -        max_x = scr_w - 1;
 -        max_y = scr_h - 1;
-+        max_x = (!scon->opengl && scon->real_renderer) ? (surf_w - 1) : (scr_w - 1);
-+        max_y = (!scon->opengl && scon->real_renderer) ? (surf_h - 1) : (scr_h - 1);
-         if (gui_grab && !gui_fullscreen
+-        if (gui_grab && !gui_fullscreen
 -            && (ev->motion.x == 0 || ev->motion.y == 0 ||
 -                ev->motion.x == max_x || ev->motion.y == max_y)) {
-+            && (ev->motion.x <= 0 || ev->motion.y <= 0 ||
-+                ev->motion.x >= max_x || ev->motion.y >= max_y)) {
-             sdl_grab_end(scon);
-         }
-         if (!gui_grab &&
-@@ -518,12 +591,50 @@ static void handle_mousemotion(SDL_Event *ev)
-             sdl_grab_start(scon);
-         }
-     }
--    surf_w = surface_width(scon->surface);
--    surf_h = surface_height(scon->surface);
+-            sdl_grab_end(scon);
+-        }
+-        if (!gui_grab &&
+-            (ev->motion.x > 0 && ev->motion.x < max_x &&
+-             ev->motion.y > 0 && ev->motion.y < max_y)) {
+-            sdl_grab_start(scon);
+-        }
+-    }
+     surf_w = surface_width(scon->surface);
+     surf_h = surface_height(scon->surface);
 -    x = (int64_t)ev->motion.x * surf_w / scr_w;
 -    y = (int64_t)ev->motion.y * surf_h / scr_h;
 -    dx = (int64_t)ev->motion.xrel * surf_w / scr_w;
 -    dy = (int64_t)ev->motion.yrel * surf_h / scr_h;
++
++    max_x = scr_w - 1;
++    max_y = scr_h - 1;
++    if (gui_grab && !gui_fullscreen
++        && (ev->motion.x <= 0 || ev->motion.y <= 0 ||
++            ev->motion.x >= max_x || ev->motion.y >= max_y)) {
++        sdl_grab_end(scon);
++    }
++    if (!gui_grab &&
++        (ev->motion.x > 0 && ev->motion.x < max_x &&
++         ev->motion.y > 0 && ev->motion.y < max_y)) {
++        sdl_grab_start(scon);
++    }
 +
 +    /*
 +     * The guest framebuffer is scaled to fit inside the window while
@@ -508,7 +702,7 @@ index aaaede5..2f4d2e2 100644
      if (gui_grab || qemu_input_is_absolute(scon->dcl.con) || absolute_enabled) {
          sdl_send_mouse_event(scon, dx, dy, x, y, ev->motion.state);
      }
-@@ -535,6 +646,9 @@ static void handle_mousebutton(SDL_Event *ev)
+@@ -535,6 +746,9 @@ static void handle_mousebutton(SDL_Event *ev)
      SDL_MouseButtonEvent *bev;
      struct sdl2_console *scon = get_scon_from_window(ev->button.windowID);
      int scr_w, scr_h, x, y;
@@ -518,7 +712,7 @@ index aaaede5..2f4d2e2 100644
  
      if (!scon || !qemu_console_is_graphic(scon->dcl.con)) {
          return;
-@@ -542,8 +656,34 @@ static void handle_mousebutton(SDL_Event *ev)
+@@ -542,15 +756,52 @@ static void handle_mousebutton(SDL_Event *ev)
  
      bev = &ev->button;
      SDL_GetWindowSize(scon->real_window, &scr_w, &scr_h);
@@ -526,7 +720,8 @@ index aaaede5..2f4d2e2 100644
 -    y = (int64_t)bev->y * surface_height(scon->surface) / scr_h;
 +    surf_w = surface_width(scon->surface);
 +    surf_h = surface_height(scon->surface);
-+
+ 
+-    if (!gui_grab && !qemu_input_is_absolute(scon->dcl.con)) {
 +    /* In 2D mode, bev->x and bev->y are ALREADY in logical guest coordinates */
 +    if (!scon->opengl && scon->real_renderer) {
 +        x = bev->x;
@@ -552,10 +747,45 @@ index aaaede5..2f4d2e2 100644
 +    /* Clamp into the guest framebuffer */
 +    if (x < 0) { x = 0; } else if (x > surf_w - 1) { x = surf_w - 1; }
 +    if (y < 0) { y = 0; } else if (y > surf_h - 1) { y = surf_h - 1; }
- 
-     if (!gui_grab && !qemu_input_is_absolute(scon->dcl.con)) {
++
++    if (!gui_grab && !qemu_input_is_absolute(scon->dcl.con) && !absolute_enabled) {
          if (ev->type == SDL_MOUSEBUTTONUP && bev->button == SDL_BUTTON_LEFT) {
-@@ -732,6 +872,10 @@ static void sdl_mouse_warp(DisplayChangeListener *dcl,
+             /* start grabbing all events */
+             sdl_grab_start(scon);
+         }
+     } else {
++        if (!guest_sprite && (qemu_input_is_absolute(scon->dcl.con) || absolute_enabled)) {
++            if (ev->type == SDL_MOUSEBUTTONDOWN && bev->button == SDL_BUTTON_LEFT) {
++                if (sdl_cursor_blue_dot_active) {
++                    SDL_SetCursor(sdl_cursor_blue_dot_active);
++                }
++            } else if (ev->type == SDL_MOUSEBUTTONUP && bev->button == SDL_BUTTON_LEFT) {
++                if (sdl_cursor_blue_dot) {
++                    SDL_SetCursor(sdl_cursor_blue_dot);
++                }
++            }
++        }
+         if (ev->type == SDL_MOUSEBUTTONDOWN) {
+             buttonstate |= SDL_BUTTON(bev->button);
+         } else {
+@@ -612,7 +863,6 @@ static void handle_windowevent(SDL_Event *ev)
+         sdl2_redraw(scon);
+         break;
+     case SDL_WINDOWEVENT_FOCUS_GAINED:
+-        /* fall through */
+     case SDL_WINDOWEVENT_ENTER:
+         if (!gui_grab && (qemu_input_is_absolute(scon->dcl.con) || absolute_enabled)) {
+             absolute_mouse_grab(scon);
+@@ -626,6 +876,8 @@ static void handle_windowevent(SDL_Event *ev)
+          */
+         scon->ignore_hotkeys = get_mod_state();
+         break;
++    case SDL_WINDOWEVENT_LEAVE:
++        break;
+     case SDL_WINDOWEVENT_FOCUS_LOST:
+         if (gui_grab && !gui_fullscreen) {
+             sdl_grab_end(scon);
+@@ -732,6 +984,10 @@ static void sdl_mouse_warp(DisplayChangeListener *dcl,
                             int x, int y, bool on)
  {
      struct sdl2_console *scon = container_of(dcl, struct sdl2_console, dcl);
@@ -566,9 +796,14 @@ index aaaede5..2f4d2e2 100644
  
      if (!qemu_console_is_graphic(scon->dcl.con)) {
          return;
-@@ -744,7 +888,27 @@ static void sdl_mouse_warp(DisplayChangeListener *dcl,
+@@ -742,13 +998,37 @@ static void sdl_mouse_warp(DisplayChangeListener *dcl,
+             sdl_show_cursor(scon);
+         }
          if (gui_grab || qemu_input_is_absolute(scon->dcl.con) || absolute_enabled) {
-             SDL_SetCursor(guest_sprite);
+-            SDL_SetCursor(guest_sprite);
++            if (guest_cursor && guest_sprite) {
++                SDL_SetCursor(guest_sprite);
++            }
              if (!qemu_input_is_absolute(scon->dcl.con) && !absolute_enabled) {
 -                SDL_WarpMouseInWindow(scon->real_window, x, y);
 +                /* Convert guest surface coordinates to window coordinates */
@@ -595,3 +830,38 @@ index aaaede5..2f4d2e2 100644
              }
          }
      } else if (gui_grab) {
+-        sdl_hide_cursor(scon);
++        if (!qemu_input_is_absolute(scon->dcl.con) && !absolute_enabled) {
++            sdl_hide_cursor(scon);
++        }
+     }
+     guest_cursor = on;
+     guest_x = x, guest_y = y;
+@@ -790,6 +1070,15 @@ static void sdl_cleanup(void)
+ {
+     if (guest_sprite) {
+         SDL_FreeCursor(guest_sprite);
++        guest_sprite = NULL;
++    }
++    if (sdl_cursor_blue_dot) {
++        SDL_FreeCursor(sdl_cursor_blue_dot);
++        sdl_cursor_blue_dot = NULL;
++    }
++    if (sdl_cursor_blue_dot_active) {
++        SDL_FreeCursor(sdl_cursor_blue_dot_active);
++        sdl_cursor_blue_dot_active = NULL;
+     }
+     SDL_QuitSubSystem(SDL_INIT_VIDEO);
+ }
+@@ -992,6 +1281,11 @@ static void sdl2_display_init(DisplayState *ds, DisplayOptions *o)
+ 
+     sdl_cursor_hidden = SDL_CreateCursor(&data, &data, 8, 1, 0, 0);
+     sdl_cursor_normal = SDL_GetCursor();
++    sdl_cursor_blue_dot = sdl2_create_touch_cursor(24, 0);
++    sdl_cursor_blue_dot_active = sdl2_create_touch_cursor(28, 1);
++    if (sdl_cursor_blue_dot) {
++        SDL_SetCursor(sdl_cursor_blue_dot);
++    }
+ 
+     if (gui_fullscreen) {
+         sdl_grab_start(&sdl2_console[0]);

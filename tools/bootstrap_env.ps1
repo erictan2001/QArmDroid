@@ -1,4 +1,4 @@
-﻿<#
+<#
 .SYNOPSIS
     Detect + export the minimal toolchain paths the repo needs, with
     machine-independent overrides. Pure-Python build tools (imgtools.py)
@@ -68,16 +68,9 @@ function Find-Adb {
 
 function Find-Qemu {
     if ($Qemu) { return $Qemu }
-    # 1) repo-local custom build
+    # Single source of truth: repo-local custom build
     $custom = Join-Path $RepoRoot "tools\qemu-gfxstream\qemu\build\qemu-system-aarch64.exe"
-    if (-not $Qemu -and (Test-Path $custom)) { return $custom }
-    # 2) msys2 stock
-    if (Test-Path "C:\msys64\clangarm64\bin\qemu-system-aarch64.exe") {
-        return "C:\msys64\clangarm64\bin\qemu-system-aarch64.exe"
-    }
-    # 3) PATH
-    $cmd = Get-Command "qemu-system-aarch64" -ErrorAction SilentlyContinue
-    if ($cmd) { return $cmd.Source }
+    if (Test-Path $custom) { return $custom }
     return ""
 }
 

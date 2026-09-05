@@ -43,6 +43,7 @@ param(
     [string]$RuntimeRoot,
     [switch]$Force,
     [switch]$SkipDisk,
+    [switch]$RebuildDisk,
     [int]$DiskSizeGB = 8,
     [string]$FsFormat = "ext4"
 )
@@ -108,17 +109,20 @@ $toolsSrc = Join-Path $InstallRoot "tools"
 
     Emit-Progress 12 "Copying QEMU binary"
     Write-Host "== syncing QEMU runtime ==" -ForegroundColor Cyan
-$qemuDst  = Join-Path $RuntimeRoot "qemu"
-$imgDst   = Join-Path $RuntimeRoot "image"
-$toolsDst = Join-Path $RuntimeRoot "tools"
+$qemuDst   = Join-Path $RuntimeRoot "qemu"
+$imgDst    = Join-Path $RuntimeRoot "image"
+$toolsDst  = Join-Path $RuntimeRoot "tools"
+$scrcpyDst = Join-Path $RuntimeRoot "scrcpy"
 
-foreach ($d in @($qemuDst, $imgDst, $toolsDst)) { New-Item -ItemType Directory -Force -Path $d | Out-Null }
+foreach ($d in @($qemuDst, $imgDst, $toolsDst, $scrcpyDst)) { New-Item -ItemType Directory -Force -Path $d | Out-Null }
 
 $imageInputs = @("kernel","initrd.img","boot.img","init_boot.img","vendor_boot.img",
                  "vbmeta.img","vbmeta_system.img","vbmeta_system_dlkm.img",
                  "vbmeta_vendor_dlkm.img","super.img")
 
-$needSync = $Force -or -not (Test-Path (Join-Path $qemuDst "qemu-system-aarch64.exe"))
+$qemuSrcExe = Join-Path $qemuSrc "qemu-system-aarch64.exe"
+$qemuDstExe = Join-Path $qemuDst "qemu-system-aarch64.exe"
+$needSync = $Force -or -not (Test-Path $qemuDstExe) -or ((Test-Path $qemuSrcExe) -and ((Get-Item $qemuSrcExe).LastWriteTime -gt (Get-Item $qemuDstExe).LastWriteTime))
 
 if ($needSync) {
     Emit-Progress 18 "Copying QEMU binary"
@@ -134,7 +138,24 @@ if ($needSync) {
         Copy-Item (Join-Path $qemuSrc "share\qemu\*") $fwDst -Recurse -Force
     }
 
-    Emit-Progress 35 "Copying Android image inputs"
+    Emit-Progress 30 "Copying Scrcpy mirror & ADB tools"
+    Write-Host "== syncing Scrcpy ==" -ForegroundColor Cyan
+    $scrcpySrc = Join-Path $InstallRoot "scrcpy"
+    if (-not (Test-Path $scrcpySrc)) {
+        $scrcpySrc = Join-Path $InstallRoot "tools\scrcpy"
+    }
+    if (-not (Test-Path $scrcpySrc)) {
+        $scrcpySrc = Join-Path $PSScriptRoot "scrcpy"
+    }
+    if (Test-Path $scrcpySrc) {
+        Copy-Item (Join-Path $scrcpySrc "*") $scrcpyDst -Recurse -Force
+        # Also ensure adb and scrcpy are accessible under tools\scrcpy for backward compat
+        $toolsScrcpy = Join-Path $toolsDst "scrcpy"
+        New-Item -ItemType Directory -Force -Path $toolsScrcpy | Out-Null
+        Copy-Item (Join-Path $scrcpySrc "*") $toolsScrcpy -Recurse -Force
+    }
+
+    Emit-Progress 40 "Copying Android image inputs"
     Write-Host "== syncing image inputs ==" -ForegroundColor Cyan
     foreach ($n in $imageInputs) {
         $s = Join-Path $imgSrc $n
@@ -169,11 +190,46 @@ if ($needSync) {
     Write-Host "runtime already provisioned (use -Force to re-sync)" -ForegroundColor DarkGray
 }
 
+# Always keep runtime tools (scripts) synchronized
+if (Test-Path $toolsSrc) {
+    Copy-Item (Join-Path $toolsSrc "*.ps1") $toolsDst -Force -ErrorAction SilentlyContinue
+    Copy-Item (Join-Path $toolsSrc "*.py") $toolsDst -Force -ErrorAction SilentlyContinue
+}
+
 # --------------------------------------------------------------- disk.raw --- #
 $disk = Join-Path $imgDst "disk.raw"
 $superImg = Join-Path $imgDst "super.img"
-if ($SkipDisk -or ((Test-Path $disk) -and -not $Force)) {
-    Write-Host "disk.raw present: $disk" -ForegroundColor Green
+
+$needDiskBuild = $false
+if ($SkipDisk) {
+    $needDiskBuild = $false
+} elseif ($Force -or $RebuildDisk -or -not (Test-Path $disk)) {
+    $needDiskBuild = $true
+    Write-Host "Disk build required (Force: $Force, RebuildDisk: $RebuildDisk, Present: $(Test-Path $disk))" -ForegroundColor Cyan
+} else {
+    # Check if existing disk.raw physical size matches requested $DiskSizeGB
+    # disk.raw layout: super (~8.59 GB) + boot partitions (~305 MB) + $DiskSizeGB
+    $diskLen = (Get-Item $disk).Length
+    $expectedApprox = ([int64]$DiskSizeGB * 1GB) + 8895000000
+    $diff = [Math]::Abs($diskLen - $expectedApprox)
+    if ($diff -gt 500MB) {
+        Write-Host "disk.raw length ($([Math]::Round($diskLen/1GB, 2)) GB) differs from target ($DiskSizeGB GB userdata) -> rebuilding" -ForegroundColor Yellow
+        $needDiskBuild = $true
+    }
+
+    # Also check userdata.fstype
+    $fsTypeFile = Join-Path $imgDst "userdata.fstype"
+    if (Test-Path $fsTypeFile) {
+        $curFs = (Get-Content $fsTypeFile -Raw).Trim().ToLower()
+        if ($curFs -and $curFs -ne $FsFormat) {
+            Write-Host "disk.raw fstype ($curFs) differs from target ($FsFormat) -> rebuilding" -ForegroundColor Yellow
+            $needDiskBuild = $true
+        }
+    }
+}
+
+if (-not $needDiskBuild) {
+    Write-Host "disk.raw present with matching config ($DiskSizeGB GB, $FsFormat): $disk" -ForegroundColor Green
     Emit-Progress 100 "Image already provisioned"
 } else {
     # Ensure super.img is present in the runtime image dir (the sync block

@@ -34,8 +34,17 @@ $ImgDir   = Join-Path $RepoRoot "aosp_cf_arm64_only_phone-img"
 $M0Dir    = Join-Path $ImgDir "work\m0"
 $QemuBuild= Join-Path $RepoRoot "tools\qemu-gfxstream\qemu\build"
 
-foreach ($d in @("$ResDir\qemu", "$ResDir\image", "$ResDir\tools")) {
+foreach ($d in @("$ResDir\qemu", "$ResDir\image", "$ResDir\tools", "$ResDir\scrcpy")) {
     New-Item -ItemType Directory -Force -Path $d | Out-Null
+}
+
+# ---------------------------------------------------------------- scrcpy ---- #
+Write-Host "== staging Scrcpy ==" -ForegroundColor Cyan
+$scrcpySrc = Join-Path $RepoRoot "tools\scrcpy"
+if (Test-Path $scrcpySrc) {
+    Copy-Item (Join-Path $scrcpySrc "*") (Join-Path $ResDir "scrcpy") -Recurse -Force
+} else {
+    Write-Warning "tools\scrcpy not found at $scrcpySrc"
 }
 
 # ---------------------------------------------------------------- QEMU ------ #
