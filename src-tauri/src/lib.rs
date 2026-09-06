@@ -858,7 +858,6 @@ fn start_emulator_with(
             // In the background, auto-connect ADB and apply display/nav mode once booted
             let tablet_mode_copy = cfg.tablet_mode;
             let gesture_nav_copy = cfg.gesture_nav;
-            let play_store_copy = cfg.play_store;
             std::thread::spawn(move || {
                 for _ in 0..60 {
                     std::thread::sleep(Duration::from_secs(2));
@@ -870,9 +869,6 @@ fn start_emulator_with(
                                     if let Ok(b_out) = adb_cmd().args(&["-s", "127.0.0.1:5555", "shell", "getprop", "sys.boot_completed"]).output() {
                                         if String::from_utf8_lossy(&b_out.stdout).trim() == "1" {
                                             apply_android_display_and_nav(tablet_mode_copy, gesture_nav_copy);
-                                            if play_store_copy {
-                                                auto_integrate_play_store_if_needed();
-                                            }
                                             break;
                                         }
                                     }
@@ -955,6 +951,12 @@ fn stop_scrcpy() -> Result<String, String> {
 #[tauri::command]
 fn stop_emulator() -> Result<String, String> {
     let _ = stop_scrcpy();
+
+    // Flush guest disk cache before terminating QEMU to preserve overlayfs and filesystem state
+    let _ = run_with_timeout(
+        adb_cmd().args(&["-s", "127.0.0.1:5555", "shell", "sync"]),
+        Duration::from_millis(1500),
+    );
 
     // Kill QEMU process on Windows
     let _ = silent_command("taskkill")
@@ -1546,7 +1548,7 @@ fn check_play_store_status() -> PlayStoreStatus {
     }
 
     let mut pkgs_cmd = adb_cmd();
-    pkgs_cmd.args(&["-s", target, "shell", "pm", "list", "packages"]);
+    pkgs_cmd.args(&["-s", target, "shell", "pm", "list", "packages", "-s"]);
     let pkgs_out = run_with_timeout(&mut pkgs_cmd, Duration::from_secs(5));
     let pkgs_str = String::from_utf8_lossy(&pkgs_out.stdout);
 
@@ -1667,6 +1669,20 @@ async fn integrate_play_store(app: tauri::AppHandle, force: Option<bool>) -> Res
 
         let exit_status = child.wait();
         let success = exit_status.map(|s| s.success()).unwrap_or(false);
+        if success {
+            let cfg = read_image_config();
+            let _ = save_image_config(
+                cfg.disk_size_gb,
+                cfg.fs_format,
+                Some(cfg.cores),
+                Some(cfg.memory_gb),
+                Some(cfg.gpu_mode),
+                Some(cfg.close_on_exit),
+                Some(cfg.tablet_mode),
+                Some(cfg.gesture_nav),
+                Some(true),
+            );
+        }
         emit(&PlayStoreProgress {
             percent: if success { 100 } else { 0 },
             stage: if success { "Done".into() } else { "Error".into() },
@@ -1685,28 +1701,6 @@ async fn integrate_play_store(app: tauri::AppHandle, force: Option<bool>) -> Res
     Ok("Play Store integration started in background".to_string())
 }
 
-fn auto_integrate_play_store_if_needed() {
-    let target = "127.0.0.1:5555";
-    let mut pkgs_cmd = adb_cmd();
-    pkgs_cmd.args(&["-s", target, "shell", "pm", "list", "packages", "com.android.vending"]);
-    let out = run_with_timeout(&mut pkgs_cmd, Duration::from_secs(5));
-    let out_str = String::from_utf8_lossy(&out.stdout);
-    if !out_str.contains("com.android.vending") {
-        let script_path = match resolve_tool_script("integrate_play_store.ps1") {
-            Some(p) => p,
-            None => return,
-        };
-        let adb = get_adb_path();
-        let mut cmd = Command::new("powershell.exe");
-        #[cfg(windows)]
-        cmd.creation_flags(CREATE_NO_WINDOW);
-        cmd.arg("-NoProfile")
-           .arg("-ExecutionPolicy").arg("Bypass")
-           .arg("-File").arg(&script_path)
-           .arg("-AdbPath").arg(&adb);
-        let _ = cmd.spawn();
-    }
-}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {

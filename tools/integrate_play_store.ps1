@@ -89,7 +89,7 @@ $gsfInstalled = $false
 $gsfId = ""
 
 if ($isConnected) {
-    $packages = & $AdbPath -s $Target shell pm list packages 2>$null
+    $packages = & $AdbPath -s $Target shell pm list packages -s 2>$null
     if ($packages -match "com\.android\.vending") { $playStoreInstalled = $true }
     if ($packages -match "com\.google\.android\.gms") { $playServicesInstalled = $true }
     if ($packages -match "com\.google\.android\.gsf") { $gsfInstalled = $true }
@@ -164,7 +164,7 @@ foreach ($cand in $localCandidates) {
 
 $gappsUrl = "https://downloads.sourceforge.net/project/nikgapps/Releases/Android-16/22-Feb-2026/NikGapps-core-arm64-16-20260222-signed.zip"
 
-if ($Force -or -not (Test-Path $gappsZip) -or ((Get-Item $gappsZip).Length -lt 50000000)) {
+if (-not (Test-Path $gappsZip) -or ((Get-Item $gappsZip).Length -lt 50000000)) {
     Emit-Progress 20 "Preparing Google components" "Locating official Google Apps package for Android 16..."
     Emit-Progress 30 "Downloading Google Play Store" "Downloading official NikGapps Core package (134 MB)..."
     
@@ -196,35 +196,41 @@ if ($Force -or -not (Test-Path $gappsZip) -or ((Get-Item $gappsZip).Length -lt 5
     }
 }
 
-Emit-Progress 55 "Extracting Google Apps" "Unpacking Google Play Store, Play Services, and GSF..."
 $extractDir = Join-Path $cacheDir "extracted"
 New-Item -ItemType Directory -Force -Path $extractDir | Out-Null
-
-$coreSubZips = @("GooglePlayStore.zip", "GmsCore.zip", "GoogleServicesFramework.zip", "ExtraFiles.zip")
-$tarCmd = Get-Command tar.exe -ErrorAction SilentlyContinue
-
-if ($tarCmd) {
-    foreach ($sz in $coreSubZips) {
-        & $tarCmd.Source -xf $gappsZip -C $extractDir "AppSet/Core/$sz" 2>$null | Out-Null
-        $szPath = Join-Path $extractDir "AppSet\Core\$sz"
-        if (Test-Path $szPath) {
-            & $tarCmd.Source -xf $szPath -C $extractDir 2>$null | Out-Null
-        }
-    }
-} else {
-    $tempAll = Join-Path $extractDir "all"
-    Expand-Archive -Path $gappsZip -DestinationPath $tempAll -Force
-    foreach ($sz in $coreSubZips) {
-        $sub = Join-Path $tempAll "AppSet\Core\$sz"
-        if (Test-Path $sub) {
-            Expand-Archive -Path $sub -DestinationPath $extractDir -Force
-        }
-    }
-}
 
 $phoneskyApk = Get-ChildItem (Join-Path $extractDir "___priv-app___Phonesky\*.apk") -ErrorAction SilentlyContinue | Select-Object -First 1
 $gmsApk = Get-ChildItem (Join-Path $extractDir "___priv-app___PrebuiltGmsCore*\*.apk") -ErrorAction SilentlyContinue | Select-Object -First 1
 $gsfApk = Get-ChildItem (Join-Path $extractDir "___priv-app___GoogleServicesFramework\*.apk") -ErrorAction SilentlyContinue | Select-Object -First 1
+
+if (-not $phoneskyApk -or -not $gmsApk -or -not $gsfApk) {
+    Emit-Progress 55 "Extracting Google Apps" "Unpacking Google Play Store, Play Services, and GSF..."
+    $coreSubZips = @("GooglePlayStore.zip", "GmsCore.zip", "GoogleServicesFramework.zip", "ExtraFiles.zip")
+    $tarCmd = Get-Command tar.exe -ErrorAction SilentlyContinue
+
+    if ($tarCmd) {
+        foreach ($sz in $coreSubZips) {
+            & $tarCmd.Source -xf $gappsZip -C $extractDir "AppSet/Core/$sz" 2>$null | Out-Null
+            $szPath = Join-Path $extractDir "AppSet\Core\$sz"
+            if (Test-Path $szPath) {
+                & $tarCmd.Source -xf $szPath -C $extractDir 2>$null | Out-Null
+            }
+        }
+    } else {
+        $tempAll = Join-Path $extractDir "all"
+        Expand-Archive -Path $gappsZip -DestinationPath $tempAll -Force
+        foreach ($sz in $coreSubZips) {
+            $sub = Join-Path $tempAll "AppSet\Core\$sz"
+            if (Test-Path $sub) {
+                Expand-Archive -Path $sub -DestinationPath $extractDir -Force
+            }
+        }
+    }
+
+    $phoneskyApk = Get-ChildItem (Join-Path $extractDir "___priv-app___Phonesky\*.apk") -ErrorAction SilentlyContinue | Select-Object -First 1
+    $gmsApk = Get-ChildItem (Join-Path $extractDir "___priv-app___PrebuiltGmsCore*\*.apk") -ErrorAction SilentlyContinue | Select-Object -First 1
+    $gsfApk = Get-ChildItem (Join-Path $extractDir "___priv-app___GoogleServicesFramework\*.apk") -ErrorAction SilentlyContinue | Select-Object -First 1
+}
 
 if (-not $phoneskyApk -or -not $gmsApk -or -not $gsfApk) {
     Emit-Progress 0 "ERROR: Extraction failed" "One or more core Google APKs missing from package."
@@ -256,8 +262,8 @@ if (-not $isWritable) {
     exit 1
 }
 
-# Clean up legacy Aurora Store if previously present
-& $AdbPath -s $Target shell "rm -rf /product/priv-app/AuroraStore; pm uninstall com.aurora.store 2>/dev/null" 2>$null | Out-Null
+# Clean up legacy Aurora Store if previously present, and any unprivileged user-space Play Store in /data/app
+& $AdbPath -s $Target shell "rm -rf /product/priv-app/AuroraStore; pm uninstall com.aurora.store 2>/dev/null; pm list packages -3 | grep -q com.android.vending && pm uninstall com.android.vending 2>/dev/null || true" 2>$null | Out-Null
 
 Emit-Progress 75 "Injecting Privileged Permissions" "Pushing system permission whitelist and configs..."
 & $AdbPath -s $Target shell "mkdir -p /product/etc/permissions /product/etc/sysconfig /product/etc/default-permissions /product/framework /product/priv-app/Phonesky /product/priv-app/PrebuiltGmsCore /product/priv-app/GoogleServicesFramework" 2>$null
@@ -318,6 +324,7 @@ $hasVending = ($finalPackages -match "com\.android\.vending")
 $hasGms = ($finalPackages -match "com\.google\.android\.gms")
 
 if ($hasVending -and $hasGms) {
+    & $AdbPath -s $Target shell sync 2>$null | Out-Null
     Emit-Progress 100 "Google Play Store integration complete!" "Official Google Play Store, Google Play Services, and GSF are active!"
     Write-Host "Integration succeeded!" -ForegroundColor Green
     exit 0
