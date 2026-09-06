@@ -1,0 +1,27 @@
+# License
+
+QArmDroid is dual-licensed under either of the following licenses, at your option:
+
+* **Apache License, Version 2.0** ([LICENSE-APACHE](LICENSE-APACHE) or https://www.apache.org/licenses/LICENSE-2.0)
+* **MIT License** ([LICENSE-MIT](LICENSE-MIT) or https://opensource.org/licenses/MIT)
+
+Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in this project by you shall be dual-licensed as above, without any additional terms or conditions.
+
+---
+
+### Third-Party & Upstream Licenses
+
+This repository and its standalone releases integrate, bundle, or communicate with third-party open-source components that retain their respective licenses:
+
+| Component | License | Description / Notes |
+|:---|:---|:---|
+| **QEMU** | **GPL-2.0** | Subprocess hypervisor (`qemu-system-aarch64`); QEMU patches in `tools/qemu-gfxstream/patches/qemu/` are derivative works of QEMU under GPL-2.0 |
+| **Android Open Source Project (AOSP)** | **Apache-2.0** / **GPL-2.0** | Cuttlefish virtual device platform, tools (`mkbootimg`), and Linux GKI kernel |
+| **Google Platform Tools (ADB)** | **Apache-2.0** | Host-guest communication CLI |
+| **Scrcpy** | **Apache-2.0** | Screen mirroring tool |
+| **Google SwiftShader & Gfxstream** | **Apache-2.0** | Graphics translation and CPU Vulkan/GLES rasterization |
+| **Rutabaga VMM** | **BSD-3-Clause** / **Apache-2.0** | Virtual machine monitor graphics abstraction library |
+| **noVNC** | **MPL-2.0** | HTML5 VNC client library |
+| **Python (Embedded)** | **PSF License** | Runtime automation environment |
+
+See individual source files, directories, and documentation for third-party notices.

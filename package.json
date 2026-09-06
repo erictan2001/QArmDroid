@@ -2,6 +2,8 @@
   "name": "qarmdroid",
   "private": true,
   "version": "0.1.0",
+  "author": "Eric Tan Chen Hee <erictan2001@gmail.com>",
+  "license": "MIT OR Apache-2.0",
   "type": "module",
   "scripts": {
     "dev": "vite",

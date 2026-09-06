@@ -238,6 +238,56 @@ ship native GPU passthrough, or remote-render from a Linux ARM64 host.
 
 ---
 
+## 👏 Credits & Acknowledgements
+
+QArmDroid is made possible thanks to the work of the open-source community and the following foundational projects, tools, and libraries:
+
+### ⚡ Virtualization & Emulation
+* **[QEMU Project](https://www.qemu.org/)** — Open-source machine emulator and virtualizer (`qemu-system-aarch64`), providing ARM64 system emulation, VirtIO device models, and bus architecture.
+* **[Windows Hypervisor Platform (WHPX)](https://learn.microsoft.com/en-us/virtualization/api/) / Microsoft** — Native Windows hypervisor acceleration API enabling direct hardware CPU virtualization on Qualcomm Snapdragon X Elite / ARM64 processors.
+
+### 🤖 Android OS & Platform
+* **[Android Open Source Project (AOSP)](https://source.android.com/)** — Android 16 (Baklava) Cuttlefish virtual device platform (`aosp_cf_arm64_only_phone`), Linux GKI 6.12 kernel, partition system, and `mkbootimg` tooling.
+* **[Google Android Platform Tools (ADB)](https://developer.android.com/tools/adb)** — Android Debug Bridge (`adb`) for host-guest communication, shell access, port forwarding, and input injection.
+* **[NikGapps](https://nikgapps.org/)** (*Nikhil Menghani*) — NikGapps Core packages providing Google Play Store (`Phonesky`), Google Play Services (`GmsCore`), and Google Services Framework (`GSF`).
+* **[Aurora Store](https://auroraoss.com/)** (*Rahul Patel / AuroraOSS*) — Open-source alternative Google Play client frontend for Android.
+
+### 🎨 Graphics, 3D Rendering & Compositing
+* **[Google SwiftShader](https://github.com/google/swiftshader)** — High-performance CPU-based Vulkan (`vulkan.pastel`) and OpenGL ES implementation enabling in-guest graphics rendering without host GPU driver dependencies.
+* **[Google Gfxstream](https://android.googlesource.com/platform/hardware/google/gfxstream/)** — Host-side graphics streaming engine and translation library for Android virtualization.
+* **[Rutabaga VMM / magma-gpu](https://github.com/magma-gpu/rutabaga_gfx)** (*ChromiumOS / crosvm*) — Cross-platform virtual machine monitor graphics abstraction library (`rutabaga_gfx_ffi`).
+* **[Simple DirectMedia Layer (SDL2)](https://www.libsdl.org/)** — Cross-platform library providing window management, display presentation, and input handling for QEMU's native SDL mode.
+* **[Pixman](http://www.pixman.org/)** — Low-level pixel manipulation library used by QEMU for framebuffer composition and VNC surface rendering.
+
+### 🖥️ Desktop Application & Frontend
+* **[Tauri v2](https://tauri.app/)** — Modern framework for building lightweight desktop applications using Rust and web technologies with native Windows integration.
+* **[React 19](https://react.dev/) & [TypeScript](https://www.typescriptlang.org/)** — Framework and type-safe language powering the interactive emulator control dashboard.
+* **[Vite](https://vite.dev/)** — Fast frontend build tool and development server.
+* **[noVNC](https://novnc.com/)** — HTML5 VNC client library powering the low-latency embedded canvas view via WebSocket RFB stream.
+
+### 📱 Screen Mirroring & Multimedia
+* **[Scrcpy](https://github.com/Genymobile/scrcpy)** (*Genymobile / Romain Vimont*) — Ultra low-latency Android screen mirroring utility with Direct3D 11 hardware rendering and fluid multi-touch input.
+* **[FFmpeg](https://ffmpeg.org/)** — Comprehensive multimedia framework used for media processing and video encoding.
+
+### 🛠️ Toolchains, Build Systems & Packaging
+* **[Rust](https://www.rust-lang.org/)** — Systems programming language powering the Tauri backend, Rutabaga FFI, and native input daemons.
+* **[LLVM / Clang / LLD](https://llvm.org/)** — Native ARM64 compiler and linker infrastructure.
+* **[MSYS2](https://www.msys2.org/)** — ClangARM64 environment and software distribution platform on Windows ARM64.
+* **[Microsoft Visual C++ (MSVC)](https://visualstudio.microsoft.com/)** — Windows ARM64 developer tools, C/C++ compiler, and linker (`link.exe`).
+* **[Meson](https://mesonbuild.com/) & [Ninja](https://ninja-build.org/)** — Modern, high-speed build systems used for building QEMU and Rutabaga GFX.
+* **[WiX Toolset](https://wixtoolset.org/)** — Windows Installer XML toolset used to generate the self-contained `.msi` installer.
+* **[BusyBox for Windows](https://frippery.org/busybox/)** (*rmryan*) — Standalone POSIX command-line utilities for MSVC build automation.
+* **[Python](https://www.python.org/)** — Embedded Python 3.12 ARM64 runtime powering zero-setup automated provisioning and pure-Python image synthesis (`m0_build.py`, `imgtools.py`).
+
+### 🤖 AI Assistance & Pair Programming
+* Developed in close collaboration with AI coding assistants (Antigravity / Deepseek Harness), which assisted across kernel and ramdisk diagnosis, QEMU and gfxstream patch engineering, GitHub Actions CI/CD automation, and desktop UI implementation.
+
+---
+
 ## 📜 License
 
-Open Source — Apache 2.0 / MIT (see individual files).
+QArmDroid is dual-licensed under either of the following licenses at your option:
+* **Apache License, Version 2.0** ([LICENSE-APACHE](LICENSE-APACHE) or https://www.apache.org/licenses/LICENSE-2.0)
+* **MIT License** ([LICENSE-MIT](LICENSE-MIT) or https://opensource.org/licenses/MIT)
+
+For third-party components and upstream licenses (such as QEMU's GPL-2.0), see [`LICENSE`](LICENSE).
