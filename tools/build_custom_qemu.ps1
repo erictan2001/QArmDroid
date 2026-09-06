@@ -21,7 +21,15 @@ $BuildDir = Join-Path $QemuDir "build"
 $RutabagaDir = Join-Path $GfxDir "rutabaga_gfx"
 $Prefix   = Join-Path $GfxDir "rutabaga-prefix"
 
-Write-Host "== [1/5] applying custom patches ==" -ForegroundColor Cyan
+$targetExe = Join-Path $BuildDir "qemu-system-aarch64.exe"
+if (-not $ForceRebuild -and (Test-Path $targetExe) -and ((Get-Item $targetExe).Length -gt 10000000)) {
+    Write-Host "Custom QEMU is already built: $targetExe ($([math]::Round((Get-Item $targetExe).Length / 1MB, 1)) MB)" -ForegroundColor Green
+    return
+}
+
+Write-Host "== [1/5] ensuring submodules & applying patches ==" -ForegroundColor Cyan
+git config --global core.protectNTFS false
+git -C $RepoRoot submodule update --init --depth 1 tools/qemu-gfxstream/qemu tools/qemu-gfxstream/rutabaga_gfx tools/qemu-gfxstream/gfxstream
 & (Join-Path $RepoRoot "tools\apply_patches.ps1")
 
 Write-Host "== [2/5] configuring build environment ==" -ForegroundColor Cyan

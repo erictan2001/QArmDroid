@@ -41,10 +41,17 @@ jobs:
     runs-on: ${{ inputs.runner || 'windows-11-arm' }}
 
     steps:
-      - name: Checkout repository & submodules
+      - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          submodules: true
+
+      - name: Configure Git and checkout required submodules
+        shell: pwsh
+        run: |
+          git config --global core.protectNTFS false
+          Write-Host "Fetching required submodules with depth 1..."
+          git submodule update --init --depth 1 tools/qemu-gfxstream/qemu tools/qemu-gfxstream/rutabaga_gfx tools/qemu-gfxstream/gfxstream
+          Write-Host "Disk space available on runner:"
+          Get-PSDrive C | Select-Object Used, Free, @{Name="FreeGB";Expression={[math]::Round($_.Free/1GB,2)}}
 
       - name: Setup Node.js
         uses: actions/setup-node@v4

@@ -89,3 +89,4 @@ work_sdk/
 work/gapps/
 work/*.png
 research/artifacts/
+tools/qemu-gfxstream/kernel-src/common/
