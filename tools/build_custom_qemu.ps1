@@ -209,12 +209,10 @@ if ($ForceRebuild -or -not (Test-Path $pcFile)) {
             Remove-Item -Recurse -Force $ffiBuildDir -ErrorAction SilentlyContinue
         }
 
-        # Write rust_native.ini instructing Meson to use MSVC linker for rustc
+        # Write rust_native.ini instructing Meson to use MSVC linker for rustc (ASCII / no BOM)
         $rustIni = Join-Path $RutabagaDir "rust_native.ini"
-        @'
-[binaries]
-rust_ld = 'link'
-'@ | Set-Content -Path $rustIni -Encoding utf8
+        $iniContent = "[binaries]`nrust_ld = 'link'`n"
+        [System.IO.File]::WriteAllText($rustIni, $iniContent, [System.Text.Encoding]::ASCII)
 
         Write-Host "  Configuring rutabaga_gfx_ffi with Meson..." -ForegroundColor Cyan
         Invoke-Meson setup build-ffi -Dffi=true --prefix="$Prefix" --native-file="$rustIni"
