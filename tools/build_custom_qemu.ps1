@@ -232,6 +232,15 @@ if (Test-Path $rutabagaDll) {
 
 $exe = Join-Path $BuildDir "qemu-system-aarch64.exe"
 if (Test-Path $exe) {
+    $sObj = Get-Command strip.exe -ErrorAction SilentlyContinue
+    $stripExe = $null
+    if ($sObj) { $stripExe = $sObj.Source }
+    if (-not $stripExe -and (Test-Path (Join-Path $clangBin "strip.exe"))) {
+        $stripExe = Join-Path $clangBin "strip.exe"
+    }
+    if ($stripExe) {
+        & $stripExe $exe
+    }
     Write-Host "Custom QEMU build successful: $exe ($([math]::Round((Get-Item $exe).Length / 1MB, 1)) MB)" -ForegroundColor Green
 } else {
     Write-Error "Custom QEMU build failed! Executable not found at $exe"
