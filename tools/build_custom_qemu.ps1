@@ -131,17 +131,24 @@ if (-not $realLinkExe) {
 }
 
 $binLink = Join-Path $binDir "link.exe"
+if (Test-Path $binLink) {
+    Remove-Item -Force $binLink -ErrorAction SilentlyContinue
+}
+
+$realLinkDir = $null
 if ($realLinkExe) {
     Write-Host "  Using MSVC-compatible linker: $realLinkExe" -ForegroundColor Green
-    if (-not (Test-Path $binLink) -or ((Get-Item $binLink).Length -ne (Get-Item $realLinkExe).Length)) {
-        Copy-Item $realLinkExe $binLink -Force
-    }
+    $realLinkDir = Split-Path $realLinkExe -Parent
 } else {
     Write-Warning "  Warning: No MSVC link.exe or lld-link.exe detected!"
 }
 
-# Prioritize $binDir so our verified sh.exe and link.exe take precedence
-$env:PATH = "$binDir;$clangBin;$rustToolchain;$cargoBin;C:\Windows\System32;C:\Windows;$usrBin;$env:PATH"
+# Put $binDir and $realLinkDir first on PATH so genuine link.exe (with sibling DLLs like mspdbcore.dll) takes precedence
+if ($realLinkDir) {
+    $env:PATH = "$binDir;$realLinkDir;$clangBin;$rustToolchain;$cargoBin;C:\Windows\System32;C:\Windows;$usrBin;$env:PATH"
+} else {
+    $env:PATH = "$binDir;$clangBin;$rustToolchain;$cargoBin;C:\Windows\System32;C:\Windows;$usrBin;$env:PATH"
+}
 $env:MSYSTEM = "CLANGARM64"
 $env:PKG_CONFIG = Join-Path $clangBin "pkg-config.exe"
 $env:RUTABAGA_PREFIX = $Prefix
@@ -211,7 +218,8 @@ if ($ForceRebuild -or -not (Test-Path $pcFile)) {
 
         # Write rust_native.ini instructing Meson to use MSVC linker for rustc (ASCII / no BOM)
         $rustIni = Join-Path $RutabagaDir "rust_native.ini"
-        $iniContent = "[binaries]`nrust_ld = 'link'`n"
+        $iniLink = if ($realLinkExe) { $realLinkExe.Replace('\', '/') } else { 'link' }
+        $iniContent = "[binaries]`nrust_ld = '$iniLink'`n"
         [System.IO.File]::WriteAllText($rustIni, $iniContent, [System.Text.Encoding]::ASCII)
 
         Write-Host "  Configuring rutabaga_gfx_ffi with Meson..." -ForegroundColor Cyan
