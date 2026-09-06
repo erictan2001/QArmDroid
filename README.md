@@ -25,7 +25,30 @@ GPU — fully usable today: **boot, display, touch, keyboard, audio, ADB**.
 
 ---
 
-## 🚀 Quick Start (Reproduce from a fresh clone)
+## 📦 Standalone Installer (Recommended)
+
+If you want to run Android 16 on your Windows ARM64 device without manually building QEMU or fetching multi-gigabyte system images, download the **self-contained standalone installer**:
+
+### 📥 Download
+* **Latest GitHub Release**: [QArmDroid Releases](https://github.com/erictan2001/QArmDroid/releases)
+* **Latest CI Build Artifacts**: Download `QArmDroid-Windows-Installer` from the latest green [GitHub Actions Run](https://github.com/erictan2001/QArmDroid/actions/workflows/build.yml).
+
+### ✨ What's Included (100% Self-Contained)
+The Windows ARM64 `.msi` package bundles everything required to run out of the box:
+* **Custom-Patched QEMU ARM64**: Built with WHPX acceleration, custom touchscreen HID digitizer, rutabaga ExternalBlob support, and SDL letterboxing.
+* **Android 16 (Baklava) System**: Pre-processed AOSP Cuttlefish ARM64 images (`kernel`, `initrd.img`, `super.img`, `boot.img`).
+* **Tooling & Connectivity**: Bundled Scrcpy v3.3.4 and Google ADB platform-tools.
+* **Zero-Setup Provisioning**: Embedded Python 3.12 ARM64 runtime that automatically provisions and initializes the userdata storage in `%LOCALAPPDATA%\QArmDroid` on first launch.
+
+### 🚀 Installation & First Launch
+1. Ensure **Windows Hypervisor Platform** is enabled:
+   * Open **Windows Settings** → **System** → **Optional features** → **More Windows features** → check **Windows Hypervisor Platform** (reboot if prompted).
+2. Run `QArmDroid.msi` to complete the guided setup.
+3. Launch **QArmDroid** from your Start Menu or Desktop. On initial launch, the embedded provisioner prepares the local storage and boots directly to the Android 16 home screen.
+
+---
+
+## 🛠️ Building & Reproducing from Source
 
 ### 1. Set Up the Repository
 
