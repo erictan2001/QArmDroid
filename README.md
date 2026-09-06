@@ -10,6 +10,16 @@ GPU — fully usable today: **boot, display, touch, keyboard, audio, ADB**.
 
 ---
 
+## 🎬 Showcase Demo
+
+<p align="center">
+  <video src="https://github.com/erictan2001/QArmDroid/raw/main/examples/showcase-demo.mp4" controls="controls" width="100%" style="border-radius: 8px;">
+    <a href="examples/showcase-demo.mp4">▶️ Watch Showcase Demo Video (examples/showcase-demo.mp4)</a>
+  </video>
+</p>
+
+---
+
 ## ✅ Working Today (Verified)
 
 | Feature | Status | Notes |
