@@ -35,6 +35,7 @@ git -C $RepoRoot submodule update --init --depth 1 tools/qemu-gfxstream/qemu too
 Write-Host "== [2/5] configuring build environment ==" -ForegroundColor Cyan
 $msysCands = [System.Collections.Generic.List[string]]::new()
 if ($env:MSYS2_ROOT) { $msysCands.Add($env:MSYS2_ROOT) }
+if ($env:MSYS2_USR_BIN) { $msysCands.Add((Split-Path $env:MSYS2_USR_BIN -Parent)) }
 if ($env:CLANGARM64_BIN) { $msysCands.Add((Split-Path $env:CLANGARM64_BIN -Parent)) }
 if ($env:RUNNER_TEMP) { $msysCands.Add((Join-Path $env:RUNNER_TEMP "msys64")) }
 if ($env:TEMP) { $msysCands.Add((Join-Path $env:TEMP "msys64")) }
@@ -63,27 +64,11 @@ if (-not (Get-Command meson -ErrorAction SilentlyContinue) -or -not (Get-Command
     }
 }
 
-# Ensure working sh.exe in GfxDir\bin (repair broken symlinks or create from busybox / msys)
+# Clean any broken/shadowing sh.exe or link.exe in GfxDir\bin
 $binDir = Join-Path $GfxDir "bin"
-$binSh  = Join-Path $binDir "sh.exe"
-$bbExe  = Join-Path $GfxDir "tools\busybox64.exe"
-$shWorks = $false
-if (Test-Path $binSh) {
-    try {
-        $out = & $binSh -c "echo ok" 2>&1
-        if ($LASTEXITCODE -eq 0 -and $out -like "*ok*") { $shWorks = $true }
-    } catch { $shWorks = $false }
-}
-if (-not $shWorks) {
-    New-Item -ItemType Directory -Force -Path $binDir | Out-Null
-    if (Test-Path $binSh) {
-        [System.IO.File]::Delete($binSh)
-    }
-    if (Test-Path $bbExe) {
-        Copy-Item $bbExe $binSh -Force
-    } elseif (Test-Path (Join-Path $usrBin "sh.exe")) {
-        Copy-Item (Join-Path $usrBin "sh.exe") $binSh -Force
-    }
+if (Test-Path $binDir) {
+    Remove-Item -Force (Join-Path $binDir "link.exe") -ErrorAction SilentlyContinue
+    Remove-Item -Force (Join-Path $binDir "sh.exe") -ErrorAction SilentlyContinue
 }
 
 # MSVC ARM64 environment if available
@@ -143,11 +128,12 @@ if ($realLinkExe) {
     Write-Warning "  Warning: No MSVC link.exe or lld-link.exe detected!"
 }
 
-# Put $binDir and $realLinkDir first on PATH so genuine link.exe (with sibling DLLs like mspdbcore.dll) takes precedence
+# Put $realLinkDir first on PATH so genuine MSVC link.exe (with sibling DLLs like mspdbcore.dll) takes precedence over MSYS link.exe.
+# Follow with $clangBin (clang, meson, ninja, pkg-config) and $usrBin (sh, bash, POSIX utilities).
 if ($realLinkDir) {
-    $env:PATH = "$binDir;$realLinkDir;$clangBin;$rustToolchain;$cargoBin;C:\Windows\System32;C:\Windows;$usrBin;$env:PATH"
+    $env:PATH = "$realLinkDir;$clangBin;$usrBin;$rustToolchain;$cargoBin;C:\Windows\System32;C:\Windows;$env:PATH"
 } else {
-    $env:PATH = "$binDir;$clangBin;$rustToolchain;$cargoBin;C:\Windows\System32;C:\Windows;$usrBin;$env:PATH"
+    $env:PATH = "$clangBin;$usrBin;$rustToolchain;$cargoBin;C:\Windows\System32;C:\Windows;$env:PATH"
 }
 $env:MSYSTEM = "CLANGARM64"
 $env:PKG_CONFIG = Join-Path $clangBin "pkg-config.exe"
@@ -238,41 +224,50 @@ $buildNinja = Join-Path $BuildDir "build.ninja"
 if ($ForceRebuild -or -not (Test-Path $buildNinja)) {
     Push-Location $QemuDir
     try {
-        if (Test-Path (Join-Path $BuildDir "meson-info")) {
-            Invoke-Meson setup build --reconfigure -Dvnc=enabled -Dpixman=enabled -Drutabaga_gfx=enabled
+        # Remove existing build directory if force rebuild or incomplete configuration
+        if (Test-Path $BuildDir) {
+            Write-Host "  Removing build dir $BuildDir for clean configuration..." -ForegroundColor DarkGray
+            Remove-Item -Recurse -Force $BuildDir -ErrorAction SilentlyContinue
+        }
+
+        # Ensure keycodemapdb is present
+        $kdbDir = Join-Path $QemuDir "subprojects\keycodemapdb"
+        if (-not (Test-Path (Join-Path $kdbDir "data"))) {
+            Write-Host "  Fetching keycodemapdb..." -ForegroundColor DarkGray
+            if (Test-Path $kdbDir) { Remove-Item -Recurse -Force $kdbDir -ErrorAction SilentlyContinue }
+            git clone --depth 1 https://gitlab.com/qemu-project/keycodemapdb.git $kdbDir
+        }
+
+        function ConvertTo-MsysPath([string]$winPath) {
+            $p = (Resolve-Path $winPath).Path.Replace('\', '/')
+            if ($p -match '^([a-zA-Z]):/(.*)') {
+                return "/" + $Matches[1].ToLower() + "/" + $Matches[2]
+            }
+            return $p
+        }
+
+        $bashExe = Join-Path $usrBin "bash.exe"
+        if (-not (Test-Path $bashExe)) {
+            $bashCmd = Get-Command bash.exe -ErrorAction SilentlyContinue
+            if ($bashCmd) { $bashExe = $bashCmd.Source }
+        }
+
+        $env:MSYSTEM = "CLANGARM64"
+        if ($bashExe -and (Test-Path $bashExe)) {
+            Write-Host "  Running QEMU configure using MSYS2 bash: $bashExe..." -ForegroundColor Cyan
+            $msysQemu = ConvertTo-MsysPath $QemuDir
+            $msysPkg  = ConvertTo-MsysPath (Join-Path $Prefix "lib\pkgconfig")
+            $cfgScript = @"
+export MSYSTEM=CLANGARM64
+export PKG_CONFIG_PATH="$msysPkg":`$PKG_CONFIG_PATH
+cd "$msysQemu"
+./configure --target-list=aarch64-softmmu --without-default-features --enable-tcg --enable-whpx --enable-sdl --enable-slirp --enable-rutabaga-gfx --enable-vnc --enable-pixman
+"@
+            & $bashExe -lc $cfgScript
         } else {
-            # Remove incomplete build directory so QEMU's ./configure can create it cleanly
-            if (Test-Path $BuildDir) {
-                Write-Host "  Removing incomplete build dir $BuildDir..." -ForegroundColor DarkGray
-                Remove-Item -Recurse -Force $BuildDir -ErrorAction SilentlyContinue
-            }
-
-            # Ensure keycodemapdb is present
-            $kdbDir = Join-Path $QemuDir "subprojects\keycodemapdb"
-            if (-not (Test-Path (Join-Path $kdbDir "data"))) {
-                Write-Host "  Fetching keycodemapdb..." -ForegroundColor DarkGray
-                if (Test-Path $kdbDir) { Remove-Item -Recurse -Force $kdbDir -ErrorAction SilentlyContinue }
-                git clone --depth 1 https://gitlab.com/qemu-project/keycodemapdb.git $kdbDir
-            }
-
-            $shExe = if (Test-Path $binSh) {
-                $binSh
-            } elseif (Test-Path (Join-Path $usrBin "sh.exe")) {
-                Join-Path $usrBin "sh.exe"
-            } elseif (Test-Path (Join-Path $GfxDir "tools\busybox64.exe")) {
-                Join-Path $GfxDir "tools\busybox64.exe"
-            } else {
-                "sh"
-            }
-            Write-Host "  Running QEMU configure using $shExe..." -ForegroundColor Cyan
-
-            # Explicitly specify clang and clang++ so QEMU builds with MinGW-w64 Clang
-            $clangExe = (Join-Path $clangBin "clang.exe").Replace('\', '/')
-            $clangxxExe = (Join-Path $clangBin "clang++.exe").Replace('\', '/')
+            Write-Host "  Running QEMU configure using sh fallback..." -ForegroundColor Cyan
             $cfgArgs = @(
                 "./configure",
-                "--cc=$clangExe",
-                "--cxx=$clangxxExe",
                 "--target-list=aarch64-softmmu",
                 "--without-default-features",
                 "--enable-tcg",
@@ -283,14 +278,22 @@ if ($ForceRebuild -or -not (Test-Path $buildNinja)) {
                 "--enable-vnc",
                 "--enable-pixman"
             )
-            if ($shExe -like "*busybox*") {
-                & $shExe sh @cfgArgs
-            } else {
-                & $shExe @cfgArgs
+            & sh @cfgArgs
+        }
+
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "=== QEMU configure failed with code $LASTEXITCODE ===" -ForegroundColor Red
+            $cfgLog = Join-Path $BuildDir "config.log"
+            if (Test-Path $cfgLog) {
+                Write-Host "--- Last 100 lines of $cfgLog ---" -ForegroundColor Yellow
+                Get-Content $cfgLog -Tail 100
             }
-            if ($LASTEXITCODE -ne 0) {
-                throw "QEMU configure failed with code $LASTEXITCODE"
+            $mesonLog = Join-Path $BuildDir "meson-logs\meson-log.txt"
+            if (Test-Path $mesonLog) {
+                Write-Host "--- Last 100 lines of $mesonLog ---" -ForegroundColor Yellow
+                Get-Content $mesonLog -Tail 100
             }
+            throw "QEMU configure failed with code $LASTEXITCODE"
         }
     } finally {
         Pop-Location
@@ -303,6 +306,14 @@ Write-Host "== [5/5] building qemu-system-aarch64.exe ==" -ForegroundColor Cyan
 Push-Location $QemuDir
 try {
     Invoke-Ninja -C build qemu-system-aarch64.exe
+} catch {
+    Write-Host "=== QEMU ninja build failed ===" -ForegroundColor Red
+    $mesonLog = Join-Path $BuildDir "meson-logs\meson-log.txt"
+    if (Test-Path $mesonLog) {
+        Write-Host "--- Last 100 lines of $mesonLog ---" -ForegroundColor Yellow
+        Get-Content $mesonLog -Tail 100
+    }
+    throw
 } finally {
     Pop-Location
 }

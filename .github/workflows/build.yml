@@ -123,6 +123,7 @@ jobs:
           $clang = Join-Path $msys "clangarm64\bin"
           $usr = Join-Path $msys "usr\bin"
           "CLANGARM64_BIN=$clang" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "MSYS2_USR_BIN=$usr" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           $clang | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
 
       - name: Cache custom-patched QEMU build
@@ -139,7 +140,7 @@ jobs:
         if: steps.qemu-cache.outputs.cache-hit != 'true'
         shell: pwsh
         run: |
-          powershell -ExecutionPolicy Bypass -File tools/build_custom_qemu.ps1
+          pwsh -ExecutionPolicy Bypass -File tools/build_custom_qemu.ps1
 
       - name: Cache AOSP Cuttlefish Image Archive
         uses: actions/cache@v4
@@ -153,7 +154,7 @@ jobs:
         run: |
           $buildId = if ("${{ inputs.build_id }}" -ne "") { "${{ inputs.build_id }}" } else { "15357239" }
           Write-Host "Staging application resources with custom QEMU and AOSP Build ID: $buildId"
-          powershell -ExecutionPolicy Bypass -File tools/stage_bundle.ps1 -AutoDownload -BuildId $buildId
+          pwsh -ExecutionPolicy Bypass -File tools/stage_bundle.ps1 -AutoDownload -BuildId $buildId
 
       - name: Type check and build frontend
         run: npm run build
