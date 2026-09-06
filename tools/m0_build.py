@@ -321,6 +321,15 @@ def main():
         import re as _re
         fstab_src = os.path.join(WORK, "..", "vend", "fs", "first_stage_ramdisk",
                                  "system", "etc", "fstab.cf.ext4.cts")
+        if not os.path.exists(fstab_src):
+            for candidate in [
+                os.path.join(WORK, "..", "vend", "first_stage_ramdisk", "system", "etc", "fstab.cf.ext4.cts"),
+                os.path.join(WORK, "..", "vend", "fs", "system", "etc", "fstab.cf.ext4.cts"),
+                os.path.join(WORK, "..", "vend", "system", "etc", "fstab.cf.ext4.cts"),
+            ]:
+                if os.path.exists(candidate):
+                    fstab_src = candidate
+                    break
         fstab_out_lines = []
         for line in open(fstab_src).read().splitlines():
             s = line.strip()

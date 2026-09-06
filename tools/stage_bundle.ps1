@@ -214,6 +214,10 @@ if ((-not (Test-Path $kernel)) -or (-not (Test-Path $initrd)) -or (-not (Test-Pa
         Write-Host "  Image inputs missing; running setup_image.ps1..." -ForegroundColor Yellow
         & (Join-Path $RepoRoot "tools\setup_image.ps1") -BuildId $BuildId
     }
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error "setup_image.ps1 failed with exit code $LASTEXITCODE"
+        exit 1
+    }
 }
 
 if (-not (Test-Path $kernel)) { Write-Error "kernel not found: $kernel" }

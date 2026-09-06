@@ -223,15 +223,16 @@ if (-not (Test-Path (Join-Path $initFs "init"))) {
 }
 
 # work/vend/fs  (for fstab.cf.ext4.cts)
-$vendFs = Join-Path $ImgDir "work\vend"
+$vendFs = Join-Path $ImgDir "work\vend\fs"
 New-Item -ItemType Directory -Force -Path $vendFs | Out-Null
 Write-Host "== extract vendor ramdisk -> work/vend/fs ==" -ForegroundColor Cyan
 Expand-Ramdisk (Join-Path $outVend "vendor_ramdisk00") $vendFs
 
-$fstab = Join-Path $vendFs "fs\first_stage_ramdisk\system\etc\fstab.cf.ext4.cts"
+$fstab = Join-Path $vendFs "first_stage_ramdisk\system\etc\fstab.cf.ext4.cts"
 if (-not (Test-Path $fstab)) {
-    # try alternate location: some builds put it at system/etc directly
-    $alt = Get-ChildItem -Path (Join-Path $vendFs "fs") -Recurse -Filter "fstab.cf.ext4.cts" -ErrorAction SilentlyContinue |
+    # try alternate locations under work\vend
+    $searchDir = Join-Path $ImgDir "work\vend"
+    $alt = Get-ChildItem -Path $searchDir -Recurse -Filter "fstab.cf.ext4.cts" -ErrorAction SilentlyContinue |
         Select-Object -First 1 -ExpandProperty FullName
     if ($alt) {
         Write-Host "   fstab found at: $alt" -ForegroundColor DarkGray
@@ -245,9 +246,9 @@ if (-not (Test-Path $fstab)) {
 # ------------------------------------------------ build boot artifacts ----- #
 Write-Host "== building bootconfig and initrd ==" -ForegroundColor Cyan
 & $Python (Join-Path $Tools "m0_build.py") bootconfig
-if ($LASTEXITCODE -ne 0) { Write-Error "m0_build.py bootconfig failed" }
+if ($LASTEXITCODE -ne 0) { Write-Error "m0_build.py bootconfig failed"; exit 1 }
 & $Python (Join-Path $Tools "m0_build.py") initrd
-if ($LASTEXITCODE -ne 0) { Write-Error "m0_build.py initrd failed" }
+if ($LASTEXITCODE -ne 0) { Write-Error "m0_build.py initrd failed"; exit 1 }
 
 # --------------------------------------------------------------- final check #
 Write-Host ""
