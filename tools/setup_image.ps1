@@ -1,4 +1,4 @@
-﻿<#
+<#
 .SYNOPSIS
     Prepare the Cuttlefish ARM64 image directory (aosp_cf_arm64_only_phone-img)
     from a downloaded AOSP Cuttlefish arm64 image, so that m0_build.py and
@@ -43,6 +43,8 @@ param(
     [string]$ImageZip,
     [string]$ImageDir,
     [switch]$Automated,
+    [string]$BuildId  = "15357239",
+    [switch]$ForceDownload,
     [string]$Python   = "python"
 )
 
@@ -90,13 +92,59 @@ elseif ($ImageDir) {
         if ($src) { $ImageDir = $src } else { Write-Error "boot.img not found under $ImageDir" }
     }
 }
-elseif ($Automated) {
-    Write-Warning "Automated ci.android.com fetch (fetch_cvd) is not reliable from this repo.";
-    Write-Warning "Download the image manually (see README 'Image download') and pass -ImageZip or -ImageDir.";
-    Write-Error "No image source given."
+elseif ($Automated -or $ForceDownload -or (-not (Get-ImageFiles))) {
+    Write-Host "== automated AOSP Cuttlefish ARM64 download (Build ID: $BuildId) ==" -ForegroundColor Cyan
+    $zipName = "aosp_cf_arm64_only_phone-img-$BuildId.zip"
+    $downloadZip = Join-Path $ImgDir $zipName
+    $url = "https://ci.android.com/builds/submitted/$BuildId/aosp_cf_arm64_only_phone-userdebug/latest/raw/$zipName"
+
+    if ($ForceDownload -or -not (Test-Path $downloadZip) -or ((Get-Item $downloadZip).Length -lt 500000000)) {
+        Write-Host "Downloading from $url..." -ForegroundColor Yellow
+        $downloadSuccess = $false
+        $curlCmd = Get-Command curl.exe -ErrorAction SilentlyContinue
+        if ($curlCmd) {
+            Write-Host "Downloading via curl..."
+            & $curlCmd.Source -L --fail --show-error -o $downloadZip $url
+            if ($LASTEXITCODE -eq 0 -and (Test-Path $downloadZip) -and ((Get-Item $downloadZip).Length -gt 500000000)) {
+                $downloadSuccess = $true
+            }
+        }
+        if (-not $downloadSuccess) {
+            Write-Host "Downloading via WebClient..."
+            try {
+                $wc = New-Object System.Net.WebClient
+                $wc.Headers.Add("User-Agent", "Mozilla/5.0")
+                $wc.DownloadFile($url, $downloadZip)
+                if ((Test-Path $downloadZip) -and ((Get-Item $downloadZip).Length -gt 500000000)) {
+                    $downloadSuccess = $true
+                }
+            } catch {
+                Write-Warning "WebClient download failed: $_"
+            }
+        }
+        if (-not $downloadSuccess) {
+            Write-Error "Failed to download AOSP Cuttlefish ARM64 image from $url"
+            exit 1
+        }
+    }
+
+    Write-Host "== unzipping $downloadZip ==" -ForegroundColor Cyan
+    $tmp = Join-Path $ImgDir "_unzip"
+    if (Test-Path $tmp) { Remove-Item -Recurse -Force $tmp }
+    New-Item -ItemType Directory -Force -Path $tmp | Out-Null
+    Expand-Archive -Path $downloadZip -DestinationPath $tmp -Force
+    $src = Get-ChildItem -Path $tmp -Recurse -Filter boot.img -ErrorAction SilentlyContinue |
+        Select-Object -First 1 -ExpandProperty DirectoryName
+    if (-not $src) { Write-Error "no boot.img found inside downloaded zip" }
+    Write-Host "   image files in: $src" -ForegroundColor DarkGray
+    $ImageDir = $src
+}
+elseif (Get-ImageFiles) {
+    Write-Host "== reusing existing image files in $ImgDir ==" -ForegroundColor Green
+    $ImageDir = $ImgDir
 }
 else {
-    Write-Error "No image source: pass -ImageZip (zip file) or -ImageDir (dir). See README for where to download the CF arm64 image."
+    Write-Error "No image source: pass -ImageZip, -ImageDir, or -Automated."
 }
 
 Write-Host "== copying image files ==" -ForegroundColor Cyan
@@ -115,18 +163,27 @@ if (-not (Get-ImageFiles)) {
 }
 
 # --------------------------------------------------------- unpack boot img  #
-# boot.img -> out_boot (kernel, ramdisk) - used? m0_build mainly uses
-# init_boot/vendor_boot; keep for completeness.
+# boot.img -> out_boot (kernel, ramdisk)
 $outBoot = Join-Path $ImgDir "out_boot"
 New-Item -ItemType Directory -Force -Path $outBoot | Out-Null
 Write-Host "== unpack boot.img ==" -ForegroundColor Cyan
-python "$Tools\mkbootimg\unpack_bootimg.py" --boot_img (Join-Path $img "boot.img") --out $outBoot 2>&1 | Out-Null
+& $Python "$Tools\mkbootimg\unpack_bootimg.py" --boot_img (Join-Path $img "boot.img") --out $outBoot 2>&1 | Out-Null
+
+$outKernelDir = Join-Path $ImgDir "out"
+New-Item -ItemType Directory -Force -Path $outKernelDir | Out-Null
+$bootKernel = Join-Path $outBoot "kernel"
+if (Test-Path $bootKernel) {
+    Copy-Item $bootKernel (Join-Path $outKernelDir "kernel") -Force
+    Write-Host "   staged kernel -> out/kernel" -ForegroundColor DarkGray
+} else {
+    Write-Error "unpack_bootimg did not produce out_boot/kernel"
+}
 
 # init_boot.img -> out_init/ramdisk (lz4 cpio)
 $outInit = Join-Path $ImgDir "out_init"
 New-Item -ItemType Directory -Force -Path $outInit | Out-Null
 Write-Host "== unpack init_boot.img ==" -ForegroundColor Cyan
-python "$Tools\mkbootimg\unpack_bootimg.py" --boot_img (Join-Path $img "init_boot.img") --out $outInit 2>&1 | Out-Null
+& $Python "$Tools\mkbootimg\unpack_bootimg.py" --boot_img (Join-Path $img "init_boot.img") --out $outInit 2>&1 | Out-Null
 if (-not (Test-Path (Join-Path $outInit "ramdisk"))) {
     Write-Error "unpack_bootimg did not produce out_init/ramdisk"
 }
@@ -135,7 +192,7 @@ if (-not (Test-Path (Join-Path $outInit "ramdisk"))) {
 $outVend = Join-Path $ImgDir "out_vendor"
 New-Item -ItemType Directory -Force -Path $outVend | Out-Null
 Write-Host "== unpack vendor_boot.img ==" -ForegroundColor Cyan
-python "$Tools\mkbootimg\unpack_bootimg.py" --boot_img (Join-Path $img "vendor_boot.img") --out $outVend 2>&1 | Out-Null
+& $Python "$Tools\mkbootimg\unpack_bootimg.py" --boot_img (Join-Path $img "vendor_boot.img") --out $outVend 2>&1 | Out-Null
 if (-not (Test-Path (Join-Path $outVend "vendor_ramdisk00"))) {
     Write-Error "unpack_bootimg did not produce out_vendor/vendor_ramdisk00"
 }
@@ -185,14 +242,21 @@ if (-not (Test-Path $fstab)) {
     }
 }
 
+# ------------------------------------------------ build boot artifacts ----- #
+Write-Host "== building bootconfig and initrd ==" -ForegroundColor Cyan
+& $Python (Join-Path $Tools "m0_build.py") bootconfig
+if ($LASTEXITCODE -ne 0) { Write-Error "m0_build.py bootconfig failed" }
+& $Python (Join-Path $Tools "m0_build.py") initrd
+if ($LASTEXITCODE -ne 0) { Write-Error "m0_build.py initrd failed" }
+
 # --------------------------------------------------------------- final check #
 Write-Host ""
 Write-Host "== summary ==" -ForegroundColor Green
 foreach ($p in @("boot.img","super.img","init_boot.img","vendor_boot.img",
-                 "out_init\ramdisk","out_vendor\vendor_ramdisk00",
+                 "out\kernel","work\m0\bootconfig.bin","work\m0\initrd.img",
                  "work\vend\fs\first_stage_ramdisk\system\etc\fstab.cf.ext4.cts")) {
     $full = Join-Path $ImgDir $p
     Write-Host "  $p : $(Test-Path $full)" -ForegroundColor $(if (Test-Path $full) {"Green"} else {"Yellow"})
 }
 Write-Host ""
-Write-Host "Next: python tools\m0_build.py bootconfig; python tools\m0_build.py initrd; python tools\m0_build.py disk; tools\reproduce.ps1" -ForegroundColor Cyan
+Write-Host "Ready! You can now run tools\stage_bundle.ps1 to prepare installer resources." -ForegroundColor Green

@@ -1,31 +1,46 @@
 <#
 .SYNOPSIS
-    Stage the QArmDroid installer resources (custom QEMU + Android image).
+    Stage the QArmDroid installer resources (custom QEMU + Android image + tools).
 
 .DESCRIPTION
-    Assembles src-tauri\resources\ from the repo's verified working state so
-    `npx tauri build` produces an installer that is self-contained:
+    Assembles src-tauri\resources\ so `npx tauri build` produces an installer
+    that is 100% self-contained and fully functional:
 
-        resources\qemu\qemu-system-aarch64.exe   (+ runtime DLLs beside it)
+        resources\qemu\qemu-system-aarch64.exe   (+ all runtime DLLs beside it + share\qemu)
         resources\image\kernel, initrd.img, boot.img, init_boot.img,
                       vendor_boot.img, vbmeta*.img, super.img
         resources\tools\launch.ps1, provision_bundle.ps1, m0_build.py,
-                      imgtools.py
+                      imgtools.py, integrate_play_store.ps1
+        resources\python\python.exe (+ stdlib DLLs, Lib, _pth)
+        resources\scrcpy\scrcpy.exe (+ scrcpy-server, DLLs)
+        resources\platform-tools\adb.exe (+ AdbWinApi.dll, AdbWinUsbApi.dll)
 
     The 16 GB disk.raw is NOT bundled; provision_bundle.ps1 rebuilds it on
-    first run into %LOCALAPPDATA%\QArmDroid from the ~1.5 GB super.img.
-
-    Output goes to src-tauri\resources\ (referenced by tauri.conf.json
-    bundle.resources). Runs from any cwd.
+    first run into %LOCALAPPDATA%\QArmDroid from the bundled ~1.5 GB super.img.
 
 .PARAMETER NoQemu
     Skip copying the QEMU binary (already staged); only refresh image/tools.
 
+.PARAMETER AutoDownload
+    Automatically download missing external dependencies (AOSP image, Python
+    embeddable, Scrcpy, Platform-tools) if not present locally.
+
+.PARAMETER BuildId
+    AOSP Cuttlefish build ID for image download (defaults to 15357239).
+
+.PARAMETER Force
+    Overwrite staged files even if they already exist in src-tauri\resources.
+
 .EXAMPLE
-    powershell -File tools\stage_bundle.ps1
+    powershell -ExecutionPolicy Bypass -File tools\stage_bundle.ps1 -AutoDownload
 #>
 [CmdletBinding()]
-param([switch]$NoQemu)
+param(
+    [switch]$NoQemu,
+    [switch]$AutoDownload,
+    [string]$BuildId = "15357239",
+    [switch]$Force
+)
 
 $ErrorActionPreference = "Continue"
 $RepoRoot = (Resolve-Path "$PSScriptRoot\..").Path
@@ -34,93 +49,176 @@ $ImgDir   = Join-Path $RepoRoot "aosp_cf_arm64_only_phone-img"
 $M0Dir    = Join-Path $ImgDir "work\m0"
 $QemuBuild= Join-Path $RepoRoot "tools\qemu-gfxstream\qemu\build"
 
-foreach ($d in @("$ResDir\qemu", "$ResDir\image", "$ResDir\tools", "$ResDir\scrcpy", "$ResDir\platform-tools")) {
+foreach ($d in @("$ResDir\qemu", "$ResDir\image", "$ResDir\tools", "$ResDir\scrcpy", "$ResDir\platform-tools", "$ResDir\python")) {
     New-Item -ItemType Directory -Force -Path $d | Out-Null
+}
+
+function Download-FileWithRetry {
+    param(
+        [string]$Url,
+        [string]$OutFile,
+        [int64]$MinBytes = 1000
+    )
+    if (Test-Path $OutFile) {
+        $len = (Get-Item $OutFile).Length
+        if ($len -ge $MinBytes) {
+            Write-Host "  Using existing download: $OutFile ($([math]::Round($len / 1MB, 2)) MB)" -ForegroundColor DarkGray
+            return $true
+        }
+    }
+    Write-Host "  Downloading: $Url -> $OutFile" -ForegroundColor Yellow
+    $parent = Split-Path $OutFile -Parent
+    if ($parent -and -not (Test-Path $parent)) { New-Item -ItemType Directory -Force -Path $parent | Out-Null }
+    
+    $curl = Get-Command curl.exe -ErrorAction SilentlyContinue
+    if ($curl) {
+        & $curl.Source -L --fail --show-error --retry 3 -o $OutFile $Url
+        if ($LASTEXITCODE -eq 0 -and (Test-Path $OutFile) -and ((Get-Item $OutFile).Length -ge $MinBytes)) {
+            return $true
+        }
+    }
+    
+    try {
+        $wc = New-Object System.Net.WebClient
+        $wc.Headers.Add("User-Agent", "Mozilla/5.0")
+        $wc.DownloadFile($Url, $OutFile)
+        if ((Test-Path $OutFile) -and ((Get-Item $OutFile).Length -ge $MinBytes)) {
+            return $true
+        }
+    } catch {
+        Write-Warning "Download via WebClient failed: $_"
+    }
+    
+    try {
+        Invoke-WebRequest -Uri $Url -OutFile $OutFile -UseBasicParsing
+        if ((Test-Path $OutFile) -and ((Get-Item $OutFile).Length -ge $MinBytes)) {
+            return $true
+        }
+    } catch {
+        Write-Warning "Download via Invoke-WebRequest failed: $_"
+    }
+
+    return $false
 }
 
 # ---------------------------------------------------------------- scrcpy ---- #
 Write-Host "== staging Scrcpy ==" -ForegroundColor Cyan
 $scrcpySrc = Join-Path $RepoRoot "tools\scrcpy"
+if ((-not (Test-Path (Join-Path $scrcpySrc "scrcpy.exe"))) -and $AutoDownload) {
+    Write-Host "  Scrcpy not found; auto-downloading v3.3.4..." -ForegroundColor Yellow
+    $scrcpyZip = Join-Path $RepoRoot "tools\scrcpy-win64-v3.3.4.zip"
+    $url = "https://github.com/Genymobile/scrcpy/releases/download/v3.3.4/scrcpy-win64-v3.3.4.zip"
+    if (Download-FileWithRetry $url $scrcpyZip 5000000) {
+        $tmpExtract = Join-Path $RepoRoot "tools\_scrcpy_extract"
+        if (Test-Path $tmpExtract) { Remove-Item -Recurse -Force $tmpExtract }
+        Expand-Archive -Path $scrcpyZip -DestinationPath $tmpExtract -Force
+        $inner = Get-ChildItem $tmpExtract -Directory | Select-Object -First 1
+        New-Item -ItemType Directory -Force -Path $scrcpySrc | Out-Null
+        Copy-Item (Join-Path $inner.FullName "*") $scrcpySrc -Recurse -Force
+        Remove-Item -Recurse -Force $tmpExtract -ErrorAction SilentlyContinue
+    }
+}
 if (Test-Path $scrcpySrc) {
     Copy-Item (Join-Path $scrcpySrc "*") (Join-Path $ResDir "scrcpy") -Recurse -Force
+    Write-Host "  staged Scrcpy from $scrcpySrc" -ForegroundColor DarkGray
 } else {
     Write-Warning "tools\scrcpy not found at $scrcpySrc"
 }
 
 # -------------------------------------------------------- platform-tools (ADB) ---- #
 Write-Host "== staging ADB platform-tools ==" -ForegroundColor Cyan
-$ptDst = Join-Path $ResDir "platform-tools"
-$adbSrc = $null
-$sysDrive = if ($env:SystemDrive) { $env:SystemDrive } else { "C:" }
-if (Test-Path (Join-Path $RepoRoot "tools\platform-tools\adb.exe")) {
-    $adbSrc = Join-Path $RepoRoot "tools\platform-tools"
-} elseif (Test-Path (Join-Path $RepoRoot "tools\scrcpy\adb.exe")) {
-    $adbSrc = Join-Path $RepoRoot "tools\scrcpy"
-} elseif (Test-Path "$sysDrive\platform-tools\adb.exe") {
-    $adbSrc = "$sysDrive\platform-tools"
-} elseif (Get-Command adb -ErrorAction SilentlyContinue) {
-    $adbSrc = Split-Path (Get-Command adb).Source -Parent
+$ptSrc = Join-Path $RepoRoot "tools\platform-tools"
+if ((-not (Test-Path (Join-Path $ptSrc "adb.exe"))) -and $AutoDownload) {
+    Write-Host "  Platform-tools not found; auto-downloading from Google repository..." -ForegroundColor Yellow
+    $ptZip = Join-Path $RepoRoot "tools\platform-tools.zip"
+    $url = "https://dl.google.com/android/repository/platform-tools-latest-windows.zip"
+    if (Download-FileWithRetry $url $ptZip 5000000) {
+        $tmpExtract = Join-Path $RepoRoot "tools\_pt_extract"
+        if (Test-Path $tmpExtract) { Remove-Item -Recurse -Force $tmpExtract }
+        Expand-Archive -Path $ptZip -DestinationPath $tmpExtract -Force
+        $inner = Join-Path $tmpExtract "platform-tools"
+        New-Item -ItemType Directory -Force -Path $ptSrc | Out-Null
+        Copy-Item (Join-Path $inner "*") $ptSrc -Recurse -Force
+        Remove-Item -Recurse -Force $tmpExtract -ErrorAction SilentlyContinue
+    }
 }
 
-if ($adbSrc) {
+$ptDst = Join-Path $ResDir "platform-tools"
+$adbCandidates = @(
+    $ptSrc,
+    (Join-Path $RepoRoot "tools\scrcpy"),
+    (Join-Path $ResDir "scrcpy"),
+    "$env:SystemDrive\platform-tools"
+)
+$foundAdbDir = ($adbCandidates | Where-Object { $_ -and (Test-Path (Join-Path $_ "adb.exe")) } | Select-Object -First 1)
+if (-not $foundAdbDir -and (Get-Command adb.exe -ErrorAction SilentlyContinue)) {
+    $foundAdbDir = Split-Path (Get-Command adb.exe).Source -Parent
+}
+
+if ($foundAdbDir) {
     foreach ($f in @("adb.exe", "AdbWinApi.dll", "AdbWinUsbApi.dll")) {
-        $srcFile = Join-Path $adbSrc $f
+        $srcFile = Join-Path $foundAdbDir $f
         if (Test-Path $srcFile) {
             Copy-Item $srcFile (Join-Path $ptDst $f) -Force
+            Copy-Item $srcFile (Join-Path $ResDir "scrcpy\$f") -Force -ErrorAction SilentlyContinue
         }
     }
-    Write-Host "  staged ADB from $adbSrc" -ForegroundColor DarkGray
+    Write-Host "  staged ADB from $foundAdbDir" -ForegroundColor DarkGray
 } else {
     Write-Warning "ADB not found to stage into platform-tools"
 }
 
-# ---------------------------------------------------------------- QEMU ------ #
-if (-not $NoQemu) {
-    Write-Host "== staging QEMU ==" -ForegroundColor Cyan
-    $exe = Join-Path $QemuBuild "qemu-system-aarch64.exe"
-    if (-not (Test-Path $exe)) { Write-Error "custom QEMU not found: $exe (build first per BUILD_LOG)" }
-    Copy-Item $exe (Join-Path $ResDir "qemu") -Force
-    Get-ChildItem $QemuBuild -Filter "*.dll" | Copy-Item -Destination (Join-Path $ResDir "qemu") -Force
-    # pixman + other msys2 runtime DLLs the custom build needs (live in msys64 bin).
-    # SDL2.dll (display window) and libslirp-0.dll (user-mode networking) are
-    # imported by qemu-system-aarch64.exe but absent from the build dir; without
-    # them the bundled QEMU fails with STATUS_DLL_NOT_FOUND at launch.
-    $msysCandidates = @($env:MSYS2_ROOT, "C:\msys64", "$env:SystemDrive\msys64")
-    $msysRoot = ($msysCandidates | Where-Object { $_ -and (Test-Path (Join-Path $_ "clangarm64\bin")) } | Select-Object -First 1)
-    $msysBin = if ($msysRoot) { Join-Path $msysRoot "clangarm64\bin" } else { "C:\msys64\clangarm64\bin" }
-    $fwSrc = if ($msysRoot) { Join-Path $msysRoot "clangarm64\share\qemu" } else { "C:\msys64\clangarm64\share\qemu" }
+# ---------------------------------------------------------------- python ------ #
+Write-Host "== staging Python embeddable ==" -ForegroundColor Cyan
+$pyZipCandidates = @(
+    (Join-Path $RepoRoot "tools\python-3.12-embed-arm64.zip"),
+    (Join-Path $RepoRoot "tools\python-3.12.8-embed-arm64.zip")
+)
+$pyZip = ($pyZipCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1)
+if (-not $pyZip -and $AutoDownload) {
+    Write-Host "  Python embeddable not found; auto-downloading 3.12.8 ARM64..." -ForegroundColor Yellow
+    $pyZip = Join-Path $RepoRoot "tools\python-3.12-embed-arm64.zip"
+    $url = "https://www.python.org/ftp/python/3.12.8/python-3.12.8-embed-arm64.zip"
+    $ok = Download-FileWithRetry $url $pyZip 8000000
+    if (-not $ok) { Write-Error "Failed to download Python embeddable" }
+}
 
-    foreach ($dll in @("libpixman-1-0.dll","libzstd-1.dll","SDL2.dll","libslirp-0.dll")) {
-        $s = Join-Path $msysBin $dll
-        if (Test-Path $s) { Copy-Item $s (Join-Path $ResDir "qemu") -Force }
+if ($pyZip -and (Test-Path $pyZip)) {
+    $pyDir = Join-Path $ResDir "python"
+    New-Item -ItemType Directory -Force -Path $pyDir | Out-Null
+    Expand-Archive -Force -Path $pyZip -DestinationPath $pyDir
+    $pysiteSrc = Join-Path $RepoRoot "tools\qemu-gfxstream\pysite"
+    if (Test-Path $pysiteSrc) { Copy-Item -Recurse -Force $pysiteSrc (Join-Path $pyDir "pysite") }
+    $pth = Join-Path $pyDir "python312._pth"
+    if (Test-Path $pth) {
+        $c = Get-Content $pth -Raw
+        if ($c -notmatch "Lib\\") { Add-Content $pth "Lib\" }
+        if ($c -notmatch "\.") { Add-Content $pth "." }
     }
-
-    # QEMU data dir (share\qemu): the custom build defaults to its compile-time
-    # datadir (C:\msys64\...\share\qemu) which end-user machines lack. Without
-    # it QEMU fails at launch ("failed to find romfile efi-virtio.rom", "could
-    # not find keymap file for language 'en-us'"). Ship the whole data dir
-    # (ROMs + keymaps + dtb + firmware) under qemu\share\qemu and point -L at
-    # it in launch.ps1.
-    $fwDst = Join-Path $ResDir "qemu\share\qemu"
-    New-Item -ItemType Directory -Force -Path $fwDst | Out-Null
-    if (Test-Path $fwSrc) {
-        # Copy everything EXCEPT edk2 UEFI images: the emulator boots via
-        # -kernel/-initrd direct boot, so UEFI firmware is never loaded. The
-        # edk2-*.fd blobs (~250 MB) would push the NSIS installer past its
-        # 2 GB mmap limit ("Internal compiler error #12345").
-        Copy-Item (Join-Path $fwSrc "*") $fwDst -Recurse -Force -ErrorAction SilentlyContinue
-        Get-ChildItem $fwDst -Recurse -Filter "edk2*" -ErrorAction SilentlyContinue |
-            Remove-Item -Force -Recurse -ErrorAction SilentlyContinue
-    }
+    Write-Host "  staged Python embeddable from $pyZip" -ForegroundColor DarkGray
+} else {
+    Write-Warning "Python embeddable zip not found: $pyZip"
 }
 
 # ---------------------------------------------------------------- image ----- #
 Write-Host "== staging image inputs ==" -ForegroundColor Cyan
 $kernel = Join-Path $ImgDir "out\kernel"
+$initrd = Join-Path $M0Dir "initrd.img"
+$super  = Join-Path $ImgDir "super.img"
+
+if ((-not (Test-Path $kernel)) -or (-not (Test-Path $initrd)) -or (-not (Test-Path $super))) {
+    if ($AutoDownload) {
+        Write-Host "  Image inputs missing; running setup_image.ps1 -Automated..." -ForegroundColor Yellow
+        & (Join-Path $RepoRoot "tools\setup_image.ps1") -Automated -BuildId $BuildId
+    } else {
+        Write-Host "  Image inputs missing; running setup_image.ps1..." -ForegroundColor Yellow
+        & (Join-Path $RepoRoot "tools\setup_image.ps1") -BuildId $BuildId
+    }
+}
+
 if (-not (Test-Path $kernel)) { Write-Error "kernel not found: $kernel" }
 Copy-Item $kernel (Join-Path $ResDir "image\kernel") -Force
 
-$initrd = Join-Path $M0Dir "initrd.img"
 if (-not (Test-Path $initrd)) { Write-Error "initrd.img not found: $initrd (run python tools/m0_build.py bootconfig; initrd)" }
 Copy-Item $initrd (Join-Path $ResDir "image\initrd.img") -Force
 
@@ -131,22 +229,165 @@ foreach ($n in @("boot.img","init_boot.img","vendor_boot.img","vbmeta.img",
     else { Write-Host "  (missing optional: $n)" -ForegroundColor DarkGray }
 }
 
-# ---------------------------------------------------------------- python ------ #
-Write-Host "== staging Python embeddable ==" -ForegroundColor Cyan
-$pyDir = Join-Path $ResDir "python"
-New-Item -ItemType Directory -Force -Path $pyDir | Out-Null
-$zip = "tools\python-3.12-embed-arm64.zip"
-if (-not (Test-Path $zip)) { Write-Error "Python embeddable zip not found: $zip" }
-Expand-Archive -Force -Path $zip -DestinationPath $pyDir
-# pysite for tempfile fix
-$pysiteSrc = Join-Path $RepoRoot "tools\qemu-gfxstream\pysite"
-if (Test-Path $pysiteSrc) { Copy-Item -Recurse -Force $pysiteSrc (Join-Path $pyDir "pysite") }
-# python312._pth already includes .\ and .\Lib; ensure it includes Lib\ and .
-$pth = Join-Path $pyDir "python312._pth"
-if (Test-Path $pth) {
-    $c = Get-Content $pth -Raw
-    if ($c -notmatch "Lib\\") { Add-Content $pth "Lib\" }
+# ---------------------------------------------------------------- QEMU ------ #
+if (-not $NoQemu) {
+    Write-Host "== staging QEMU ==" -ForegroundColor Cyan
+    $msysCandidates = @($env:MSYS2_ROOT, "C:\msys64", "$env:SystemDrive\msys64")
+    $msysRoot = ($msysCandidates | Where-Object { $_ -and (Test-Path (Join-Path $_ "clangarm64\bin")) } | Select-Object -First 1)
+    $msysBin = if ($msysRoot) { Join-Path $msysRoot "clangarm64\bin" } else { "C:\msys64\clangarm64\bin" }
+    $fwSrc = if ($msysRoot) { Join-Path $msysRoot "clangarm64\share\qemu" } else { "C:\msys64\clangarm64\share\qemu" }
+
+    $qemuExe = $null
+    $qemuType = ""
+    if (Test-Path (Join-Path $QemuBuild "qemu-system-aarch64.exe")) {
+        $qemuExe = Join-Path $QemuBuild "qemu-system-aarch64.exe"
+        $qemuType = "custom"
+    } elseif (Test-Path (Join-Path $msysBin "qemu-system-aarch64.exe")) {
+        $qemuExe = Join-Path $msysBin "qemu-system-aarch64.exe"
+        $qemuType = "msys2"
+    } elseif (Test-Path (Join-Path $env:LOCALAPPDATA "QArmDroid\qemu\qemu-system-aarch64.exe")) {
+        $qemuExe = Join-Path $env:LOCALAPPDATA "QArmDroid\qemu\qemu-system-aarch64.exe"
+        $qemuType = "runtime"
+    }
+
+    if (-not $qemuExe -and $AutoDownload) {
+        Write-Host "  QEMU binary not found; checking for MSYS2 pacman..." -ForegroundColor Yellow
+        $pacman = if (Test-Path "C:\msys64\usr\bin\pacman.exe") { "C:\msys64\usr\bin\pacman.exe" } elseif (Get-Command pacman.exe -ErrorAction SilentlyContinue) { (Get-Command pacman.exe).Source } else { $null }
+        if ($pacman) {
+            Write-Host "  Installing mingw-w64-clang-aarch64-qemu via pacman..." -ForegroundColor Cyan
+            & $pacman -S --noconfirm --needed mingw-w64-clang-aarch64-qemu
+            if (Test-Path (Join-Path $msysBin "qemu-system-aarch64.exe")) {
+                $qemuExe = Join-Path $msysBin "qemu-system-aarch64.exe"
+                $qemuType = "msys2"
+            }
+        }
+    }
+
+    if (-not $qemuExe) {
+        Write-Error "QEMU executable not found! Neither repo custom build ($QemuBuild\qemu-system-aarch64.exe) nor MSYS2 ($msysBin\qemu-system-aarch64.exe) exists."
+        exit 1
+    }
+
+    Write-Host "  staged QEMU ($qemuType): $qemuExe" -ForegroundColor Green
+    $qemuDst = Join-Path $ResDir "qemu"
+    Copy-Item $qemuExe (Join-Path $qemuDst "qemu-system-aarch64.exe") -Force
+
+    $qemuImg = Join-Path (Split-Path $qemuExe -Parent) "qemu-img.exe"
+    if (Test-Path $qemuImg) {
+        Copy-Item $qemuImg (Join-Path $qemuDst "qemu-img.exe") -Force
+    }
+
+    if ($qemuType -eq "custom") {
+        Get-ChildItem $QemuBuild -Filter "*.dll" | Copy-Item -Destination $qemuDst -Force
+        foreach ($dll in @("libpixman-1-0.dll","libzstd-1.dll","SDL2.dll","libslirp-0.dll")) {
+            $s = Join-Path $msysBin $dll
+            if (Test-Path $s) { Copy-Item $s $qemuDst -Force }
+        }
+    } else {
+        Write-Host "  Resolving and copying transitive DLL dependencies for MSYS2 QEMU..." -ForegroundColor DarkGray
+        $pyCmd = if (Test-Path (Join-Path $ResDir "python\python.exe")) { (Join-Path $ResDir "python\python.exe") } elseif (Get-Command python -ErrorAction SilentlyContinue) { (Get-Command python).Source } else { "python" }
+        $peScript = @"
+import os, sys, struct, shutil
+
+def get_imported_dlls(pe_path):
+    try:
+        with open(pe_path, 'rb') as f:
+            data = f.read()
+    except Exception:
+        return []
+    if len(data) < 0x40 or data[:2] != b'MZ': return []
+    pe_offset = struct.unpack('<I', data[0x3C:0x40])[0]
+    if len(data) < pe_offset + 26: return []
+    magic = struct.unpack('<H', data[pe_offset+24:pe_offset+26])[0]
+    is_64 = (magic == 0x20b)
+    data_dir_offset = pe_offset + 24 + (112 if is_64 else 96)
+    if len(data) < data_dir_offset + 16: return []
+    import_dir_rva = struct.unpack('<I', data[data_dir_offset+8:data_dir_offset+12])[0]
+    opt_header_size = struct.unpack('<H', data[pe_offset+20:pe_offset+22])[0]
+    num_sections = struct.unpack('<H', data[pe_offset+6:pe_offset+8])[0]
+    sec_offset = pe_offset + 24 + opt_header_size
+    sections = []
+    for i in range(num_sections):
+        s = data[sec_offset + i*40 : sec_offset + (i+1)*40]
+        if len(s) < 24: break
+        vsize, vaddr, rsize, roffset = struct.unpack('<IIII', s[8:24])
+        sections.append((vaddr, vsize, roffset, rsize))
+    def rva_to_offset(rva):
+        for vaddr, vsize, roffset, rsize in sections:
+            if vaddr <= rva < vaddr + max(vsize, rsize):
+                return roffset + (rva - vaddr)
+        return None
+    off = rva_to_offset(import_dir_rva)
+    if not off: return []
+    dlls = []
+    while off + 20 <= len(data):
+        entry = data[off:off+20]
+        if entry == b'\x00'*20: break
+        name_rva = struct.unpack('<I', entry[12:16])[0]
+        name_off = rva_to_offset(name_rva)
+        if name_off and name_off < len(data):
+            end = data.find(b'\x00', name_off)
+            if end != -1:
+                dlls.append(data[name_off:end].decode('ascii', 'ignore'))
+        off += 20
+    return dlls
+
+bin_dir = r'$msysBin'
+qemu_exe = r'$qemuExe'
+dst_dir = r'$qemuDst'
+visited = set()
+to_check = [qemu_exe]
+copied = 0
+
+while to_check:
+    cur = to_check.pop(0)
+    for dll in get_imported_dlls(cur):
+        dll_lower = dll.lower()
+        if dll_lower.startswith(('api-ms-', 'ext-ms-')) or dll_lower in (
+            'kernel32.dll', 'user32.dll', 'advapi32.dll', 'shell32.dll', 'ole32.dll',
+            'winmm.dll', 'ws2_32.dll', 'gdi32.dll', 'comdlg32.dll', 'version.dll',
+            'setupapi.dll', 'iphlpapi.dll', 'shlwapi.dll', 'imm32.dll', 'uxtheme.dll',
+            'crypt32.dll', 'secur32.dll', 'wininet.dll', 'dwmapi.dll', 'd3d11.dll',
+            'dxgi.dll', 'd2d1.dll', 'dwrite.dll', 'userenv.dll', 'wtsapi32.dll', 'dnsapi.dll',
+            'ncrypt.dll', 'oleaut32.dll', 'comctl32.dll', 'winspool.drv', 'opengl32.dll',
+            'hid.dll', 'msimg32.dll', 'gdiplus.dll', 'wldap32.dll', 'bcrypt.dll', 'usp10.dll',
+            'rpcrt4.dll', 'mswsock.dll', 'ntdll.dll'
+        ):
+            continue
+        cand = os.path.join(bin_dir, dll)
+        if not os.path.exists(cand):
+            for f in os.listdir(bin_dir):
+                if f.lower() == dll_lower:
+                    cand = os.path.join(bin_dir, f)
+                    break
+        if os.path.exists(cand):
+            dst = os.path.join(dst_dir, os.path.basename(cand))
+            if not os.path.exists(dst) or os.path.getsize(dst) != os.path.getsize(cand):
+                shutil.copy2(cand, dst)
+                copied += 1
+            if cand not in visited:
+                visited.add(cand)
+                to_check.append(cand)
+
+print(f'   Staged {copied} runtime DLLs ({len(visited)} total dependencies)')
+"@
+        & $pyCmd -c $peScript
+    }
+
+    # QEMU data dir (share\qemu: ROMs + keymaps + dtb + firmware)
+    $fwDst = Join-Path $ResDir "qemu\share\qemu"
+    New-Item -ItemType Directory -Force -Path $fwDst | Out-Null
+    if (Test-Path $fwSrc) {
+        # Copy everything EXCEPT edk2 UEFI images to prevent exceeding installer size limits
+        Copy-Item (Join-Path $fwSrc "*") $fwDst -Recurse -Force -ErrorAction SilentlyContinue
+        Get-ChildItem $fwDst -Recurse -Filter "edk2*" -ErrorAction SilentlyContinue |
+            Remove-Item -Force -Recurse -ErrorAction SilentlyContinue
+        Write-Host "  staged QEMU share/qemu data dir" -ForegroundColor DarkGray
+    }
 }
+
+# ---------------------------------------------------------------- tools ------ #
+Write-Host "== staging tools scripts ==" -ForegroundColor Cyan
 foreach ($n in @("launch.ps1","provision_bundle.ps1","m0_build.py","imgtools.py","integrate_play_store.ps1")) {
     $s = Join-Path (Join-Path $RepoRoot "tools") $n
     if (Test-Path $s) { Copy-Item $s (Join-Path $ResDir "tools") -Force }
@@ -154,14 +395,44 @@ foreach ($n in @("launch.ps1","provision_bundle.ps1","m0_build.py","imgtools.py"
 
 # -------------------------------------------------------------- summary ---- #
 Write-Host ""
-Write-Host "== resources staged ==" -ForegroundColor Green
+Write-Host "== bundle verification ==" -ForegroundColor Cyan
+$critical = @(
+    "qemu\qemu-system-aarch64.exe",
+    "image\kernel",
+    "image\initrd.img",
+    "image\super.img",
+    "python\python.exe",
+    "scrcpy\scrcpy.exe",
+    "platform-tools\adb.exe",
+    "tools\provision_bundle.ps1",
+    "tools\launch.ps1"
+)
+$allOk = $true
+foreach ($item in $critical) {
+    $fullPath = Join-Path $ResDir $item
+    $exists = Test-Path $fullPath
+    if (-not $exists) {
+        Write-Host "  MISSING: $item" -ForegroundColor Red
+        $allOk = $false
+    } else {
+        $sizeMb = (Get-Item $fullPath).Length / 1MB
+        Write-Host ("  OK: {0,-35} ({1,7:N1} MB)" -f $item, $sizeMb) -ForegroundColor Green
+    }
+}
+
+if (-not $allOk) {
+    Write-Error "Bundle staging incomplete - missing critical components above!"
+    exit 1
+}
+
+Write-Host ""
+Write-Host "== resources staged summary ==" -ForegroundColor Green
 $total = 0
 Get-ChildItem $ResDir -Recurse -File | ForEach-Object {
     $rel = $_.FullName.Replace("$ResDir\", "")
     $mb = $_.Length / 1MB
     $total += $_.Length
-    Write-Host ("  {0,8:N1} MB  {1}" -f $mb, $rel)
 }
-Write-Host ("  --------  TOTAL {0:N1} MB" -f ($total/1MB)) -ForegroundColor Cyan
+Write-Host ("  Total bundle size: {0:N1} MB" -f ($total/1MB)) -ForegroundColor Cyan
 Write-Host ""
-Write-Host "Next: npx tauri build   (embeds resources into the installer)" -ForegroundColor Yellow
+Write-Host "Ready! Next: npx tauri build" -ForegroundColor Green

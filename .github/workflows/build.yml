@@ -13,6 +13,17 @@ on:
         description: 'Publish as a GitHub Release'
         type: boolean
         default: false
+      target_arch:
+        description: 'Tauri build target architecture'
+        type: choice
+        options:
+          - aarch64-pc-windows-msvc
+          - x86_64-pc-windows-msvc
+        default: aarch64-pc-windows-msvc
+      build_id:
+        description: 'AOSP Cuttlefish build ID'
+        type: string
+        default: '15357239'
 
 permissions:
   contents: write
@@ -32,8 +43,15 @@ jobs:
           node-version: 22
           cache: 'npm'
 
+      - name: Setup Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-pc-windows-msvc,x86_64-pc-windows-msvc
 
       - name: Setup Rust cache
         uses: swatinem/rust-cache@v2
@@ -43,72 +61,59 @@ jobs:
       - name: Install Node dependencies
         run: npm ci
 
-      - name: Prepare bundle resources
+      - name: Setup MSYS2 & ARM64 QEMU
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: CLANGARM64
+          update: true
+          cache: true
+          install: >-
+            mingw-w64-clang-aarch64-qemu
+
+      - name: Cache AOSP Cuttlefish Image Archive
+        uses: actions/cache@v4
+        id: aosp-cache
+        with:
+          path: aosp_cf_arm64_only_phone-img/*.zip
+          key: aosp-cf-arm64-${{ inputs.build_id || '15357239' }}
+
+      - name: Stage complete bundle resources
         shell: pwsh
         run: |
-          # Ensure bundle resource directories defined in tauri.conf.json exist
-          $resDirs = @(
-            "src-tauri/resources/qemu",
-            "src-tauri/resources/image",
-            "src-tauri/resources/tools",
-            "src-tauri/resources/python",
-            "src-tauri/resources/scrcpy",
-            "src-tauri/resources/platform-tools"
-          )
-          foreach ($d in $resDirs) {
-            New-Item -ItemType Directory -Force -Path $d | Out-Null
-            New-Item -ItemType File -Force -Path (Join-Path $d ".gitkeep") | Out-Null
-          }
-
-          # Ensure ADB is bundled inside platform-tools and scrcpy
-          $ptDst = "src-tauri/resources/platform-tools"
-          if (-not (Test-Path "$ptDst/adb.exe")) {
-            Write-Host "Downloading Android SDK platform-tools..."
-            Invoke-WebRequest -Uri "https://dl.google.com/android/repository/platform-tools-latest-windows.zip" -OutFile "platform-tools.zip"
-            Expand-Archive -Path "platform-tools.zip" -DestinationPath "pt-temp" -Force
-            Copy-Item "pt-temp/platform-tools/adb.exe" "$ptDst/" -Force
-            Copy-Item "pt-temp/platform-tools/AdbWinApi.dll" "$ptDst/" -Force
-            Copy-Item "pt-temp/platform-tools/AdbWinUsbApi.dll" "$ptDst/" -Force
-            # Also ensure scrcpy directory has adb for backward compat
-            Copy-Item "pt-temp/platform-tools/adb.exe" "src-tauri/resources/scrcpy/" -Force -ErrorAction SilentlyContinue
-            Copy-Item "pt-temp/platform-tools/AdbWinApi.dll" "src-tauri/resources/scrcpy/" -Force -ErrorAction SilentlyContinue
-            Copy-Item "pt-temp/platform-tools/AdbWinUsbApi.dll" "src-tauri/resources/scrcpy/" -Force -ErrorAction SilentlyContinue
-            Remove-Item -Recurse -Force "pt-temp", "platform-tools.zip" -ErrorAction SilentlyContinue
-          }
-
-          # Copy tools scripts into resources
-          Copy-Item tools/launch.ps1 src-tauri/resources/tools/ -Force -ErrorAction SilentlyContinue
-          Copy-Item tools/provision_bundle.ps1 src-tauri/resources/tools/ -Force -ErrorAction SilentlyContinue
-          Copy-Item tools/m0_build.py src-tauri/resources/tools/ -Force -ErrorAction SilentlyContinue
-          Copy-Item tools/imgtools.py src-tauri/resources/tools/ -Force -ErrorAction SilentlyContinue
-          Copy-Item tools/integrate_play_store.ps1 src-tauri/resources/tools/ -Force -ErrorAction SilentlyContinue
+          $buildId = if ("${{ inputs.build_id }}" -ne "") { "${{ inputs.build_id }}" } else { "15357239" }
+          Write-Host "Staging application resources with AOSP Build ID: $buildId"
+          powershell -ExecutionPolicy Bypass -File tools/stage_bundle.ps1 -AutoDownload -BuildId $buildId
 
       - name: Type check and build frontend
         run: npm run build
 
       - name: Build Tauri application and installer
-        run: npx tauri build
+        shell: pwsh
+        run: |
+          $target = if ("${{ inputs.target_arch }}" -ne "") { "${{ inputs.target_arch }}" } else { "aarch64-pc-windows-msvc" }
+          Write-Host "Building Tauri bundle for target: $target"
+          npx tauri build --target $target
         env:
           CI: true
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: QArmDroid-Windows-Build
+          name: QArmDroid-Windows-Installer
           path: |
-            src-tauri/target/release/tauri-app.exe
-            src-tauri/target/release/QArmDroid.exe
-            src-tauri/target/release/bundle/msi/*.msi
-            src-tauri/target/release/bundle/nsis/*.exe
+            src-tauri/target/**/release/bundle/msi/*.msi
+            src-tauri/target/**/release/bundle/nsis/*.exe
+            src-tauri/target/**/release/tauri-app.exe
+            src-tauri/target/**/release/QArmDroid.exe
 
       - name: Publish to GitHub Release
         if: (startsWith(github.ref, 'refs/tags/v') || inputs.publish_release == true)
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            src-tauri/target/release/bundle/msi/*.msi
-            src-tauri/target/release/bundle/nsis/*.exe
-            src-tauri/target/release/tauri-app.exe
-            src-tauri/target/release/QArmDroid.exe
+            src-tauri/target/**/release/bundle/msi/*.msi
+            src-tauri/target/**/release/bundle/nsis/*.exe
+            src-tauri/target/**/release/tauri-app.exe
+            src-tauri/target/**/release/QArmDroid.exe
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
