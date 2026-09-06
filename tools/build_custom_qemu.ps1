@@ -86,18 +86,67 @@ if (-not $shWorks) {
     }
 }
 
-$env:PATH = "$GfxDir\bin;$clangBin;$usrBin;$rustToolchain;$cargoBin;C:\Windows\System32;C:\Windows;$env:PATH"
+# MSVC ARM64 environment if available
+$msvcScript = Join-Path $GfxDir "msvcenv.ps1"
+if (Test-Path $msvcScript) {
+    try {
+        & $msvcScript
+    } catch {
+        Write-Warning "msvcenv.ps1 execution failed: $_"
+    }
+}
+
+# Configure Rust and Cargo settings for MSVC ARM64 target
+$env:RUSTUP_TOOLCHAIN = "stable-aarch64-pc-windows-msvc"
+$env:RUSTUP_AUTO_INSTALL = "0"
+$env:RUST_LD = "link"
+$env:RUSTC_LD = "link"
+$env:CARGO_NET_GIT_FETCH_WITH_CLI = "true"
+
+# Ensure msysLib is added to LIB so link.exe can resolve gfxstream_backend.lib and mingw libraries
+if ($env:LIB) {
+    $env:LIB = "$env:LIB;$msysLib"
+} else {
+    $env:LIB = "$msysLib"
+}
+
+# Resolve and verify an MSVC-compatible linker (link.exe or lld-link.exe, never GNU coreutils link)
+$realLinkExe = $null
+$allLinks = @(Get-Command link.exe -All -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source)
+foreach ($cand in $allLinks) {
+    try {
+        $help = & $cand /? 2>&1
+        if ($help -like "*Microsoft*" -or $help -like "*LLD*" -or $help -like "*USAGE*") {
+            $realLinkExe = $cand
+            break
+        }
+    } catch {}
+}
+
+if (-not $realLinkExe) {
+    $lldLink = Join-Path $clangBin "lld-link.exe"
+    if (Test-Path $lldLink) {
+        $realLinkExe = $lldLink
+    }
+}
+
+$binLink = Join-Path $binDir "link.exe"
+if ($realLinkExe) {
+    Write-Host "  Using MSVC-compatible linker: $realLinkExe" -ForegroundColor Green
+    if (-not (Test-Path $binLink) -or ((Get-Item $binLink).Length -ne (Get-Item $realLinkExe).Length)) {
+        Copy-Item $realLinkExe $binLink -Force
+    }
+} else {
+    Write-Warning "  Warning: No MSVC link.exe or lld-link.exe detected!"
+}
+
+# Prioritize $binDir so our verified sh.exe and link.exe take precedence
+$env:PATH = "$binDir;$clangBin;$rustToolchain;$cargoBin;C:\Windows\System32;C:\Windows;$usrBin;$env:PATH"
 $env:MSYSTEM = "CLANGARM64"
 $env:PKG_CONFIG = Join-Path $clangBin "pkg-config.exe"
 $env:RUTABAGA_PREFIX = $Prefix
 $env:PKG_CONFIG_PATH = Join-Path $Prefix "lib\pkgconfig"
 $env:PYTHONPATH = Join-Path $GfxDir "pysite"
-
-# MSVC ARM64 environment if available
-$msvcScript = Join-Path $GfxDir "msvcenv.ps1"
-if (Test-Path $msvcScript) {
-    & $msvcScript | Out-Null
-}
 
 # Resolve Meson & Ninja executable helpers
 $mObj = Get-Command meson.exe -ErrorAction SilentlyContinue
@@ -155,9 +204,21 @@ if ($ForceRebuild -or -not (Test-Path $pcFile)) {
     Push-Location $RutabagaDir
     try {
         $ffiBuildDir = Join-Path $RutabagaDir "build-ffi"
-        if (-not (Test-Path $ffiBuildDir)) {
-            Invoke-Meson setup build-ffi -Dffi=true --prefix="$Prefix"
+        if (Test-Path $ffiBuildDir) {
+            Write-Host "  Removing existing $ffiBuildDir for clean configuration..." -ForegroundColor DarkGray
+            Remove-Item -Recurse -Force $ffiBuildDir -ErrorAction SilentlyContinue
         }
+
+        # Write rust_native.ini instructing Meson to use MSVC linker for rustc
+        $rustIni = Join-Path $RutabagaDir "rust_native.ini"
+        @'
+[binaries]
+rust_ld = 'link'
+'@ | Set-Content -Path $rustIni -Encoding utf8
+
+        Write-Host "  Configuring rutabaga_gfx_ffi with Meson..." -ForegroundColor Cyan
+        Invoke-Meson setup build-ffi -Dffi=true --prefix="$Prefix" --native-file="$rustIni"
+        Write-Host "  Installing rutabaga_gfx_ffi with Ninja..." -ForegroundColor Cyan
         Invoke-Ninja -C build-ffi install
     } finally {
         Pop-Location
@@ -179,13 +240,14 @@ if ($ForceRebuild -or -not (Test-Path $buildNinja)) {
             if (-not (Test-Path (Join-Path $QemuDir "subprojects\keycodemapdb\README"))) {
                 git submodule update --init --depth 1 subprojects/keycodemapdb
             }
-            $shExe = $null
-            if ($shObj) { $shExe = $shObj.Source }
-            if (-not $shExe -and (Test-Path (Join-Path $usrBin "sh.exe"))) {
-                $shExe = Join-Path $usrBin "sh.exe"
-            }
-            if (-not $shExe -and (Test-Path (Join-Path $GfxDir "tools\busybox64.exe"))) {
-                $shExe = Join-Path $GfxDir "tools\busybox64.exe"
+            $shExe = if (Test-Path $binSh) {
+                $binSh
+            } elseif (Test-Path (Join-Path $usrBin "sh.exe")) {
+                Join-Path $usrBin "sh.exe"
+            } elseif (Test-Path (Join-Path $GfxDir "tools\busybox64.exe")) {
+                Join-Path $GfxDir "tools\busybox64.exe"
+            } else {
+                "sh"
             }
             Write-Host "  Running QEMU configure using $shExe..." -ForegroundColor Cyan
             $cfgArgs = @(
@@ -225,9 +287,12 @@ try {
 }
 
 # Copy rutabaga_gfx_ffi.dll and rutabaga libs into build dir if needed
-$rutabagaDll = Join-Path $Prefix "bin\rutabaga_gfx_ffi.dll"
-if (Test-Path $rutabagaDll) {
-    Copy-Item $rutabagaDll $BuildDir -Force
+foreach ($sub in @("bin\rutabaga_gfx_ffi.dll", "lib\rutabaga_gfx_ffi.dll")) {
+    $dll = Join-Path $Prefix $sub
+    if (Test-Path $dll) {
+        Copy-Item $dll $BuildDir -Force
+        break
+    }
 }
 
 $exe = Join-Path $BuildDir "qemu-system-aarch64.exe"

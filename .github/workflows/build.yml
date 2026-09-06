@@ -83,6 +83,11 @@ jobs:
       - name: Install Node dependencies
         run: npm ci
 
+      - name: Setup MSVC Developer Command Prompt
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: ${{ runner.arch == 'ARM64' && 'arm64' || 'amd64_arm64' }}
+
       - name: Setup MSYS2 & ARM64 build toolchain
         uses: msys2/setup-msys2@v2
         id: msys2
@@ -119,7 +124,6 @@ jobs:
           $usr = Join-Path $msys "usr\bin"
           "CLANGARM64_BIN=$clang" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           $clang | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
-          $usr | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
 
       - name: Cache custom-patched QEMU build
         uses: actions/cache@v4
