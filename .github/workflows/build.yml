@@ -64,6 +64,12 @@ jobs:
         with:
           python-version: '3.12'
 
+      - name: Install Python build tools
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          pip install meson ninja
+
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -79,8 +85,10 @@ jobs:
 
       - name: Setup MSYS2 & ARM64 build toolchain
         uses: msys2/setup-msys2@v2
+        id: msys2
         with:
           msystem: CLANGARM64
+          path-type: inherit
           update: true
           cache: true
           install: >-
@@ -96,6 +104,22 @@ jobs:
             mingw-w64-clang-aarch64-zstd
             mingw-w64-clang-aarch64-SDL2
             mingw-w64-clang-aarch64-qemu-common
+
+      - name: Export MSYS2 environment
+        shell: pwsh
+        run: |
+          $msys = "${{ steps.msys2.outputs.msys2-location }}"
+          if (-not $msys -or -not (Test-Path $msys)) {
+            $cands = @("C:\msys64", "$env:RUNNER_TEMP\msys64", "D:\msys64", "$env:TEMP\msys64")
+            $msys = ($cands | Where-Object { Test-Path $_ } | Select-Object -First 1)
+          }
+          Write-Host "Detected MSYS2 root at: $msys"
+          "MSYS2_ROOT=$msys" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          $clang = Join-Path $msys "clangarm64\bin"
+          $usr = Join-Path $msys "usr\bin"
+          "CLANGARM64_BIN=$clang" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          $clang | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+          $usr | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
 
       - name: Cache custom-patched QEMU build
         uses: actions/cache@v4

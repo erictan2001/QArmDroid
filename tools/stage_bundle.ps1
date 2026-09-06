@@ -232,10 +232,22 @@ foreach ($n in @("boot.img","init_boot.img","vendor_boot.img","vbmeta.img",
 # ---------------------------------------------------------------- QEMU ------ #
 if (-not $NoQemu) {
     Write-Host "== staging QEMU (custom self-built) ==" -ForegroundColor Cyan
-    $msysCandidates = @($env:MSYS2_ROOT, "C:\msys64", "$env:SystemDrive\msys64")
+    $msysCandidates = [System.Collections.Generic.List[string]]::new()
+    if ($env:MSYS2_ROOT) { $msysCandidates.Add($env:MSYS2_ROOT) }
+    if ($env:CLANGARM64_BIN) { $msysCandidates.Add((Split-Path $env:CLANGARM64_BIN -Parent)) }
+    if ($env:RUNNER_TEMP) { $msysCandidates.Add((Join-Path $env:RUNNER_TEMP "msys64")) }
+    if ($env:TEMP) { $msysCandidates.Add((Join-Path $env:TEMP "msys64")) }
+    $msysCandidates.Add("C:\msys64")
+    $msysCandidates.Add("D:\msys64")
+    $msysCandidates.Add("$env:SystemDrive\msys64")
+
     $msysRoot = ($msysCandidates | Where-Object { $_ -and (Test-Path (Join-Path $_ "clangarm64\bin")) } | Select-Object -First 1)
-    $msysBin = if ($msysRoot) { Join-Path $msysRoot "clangarm64\bin" } else { "C:\msys64\clangarm64\bin" }
-    $fwSrc = if ($msysRoot) { Join-Path $msysRoot "clangarm64\share\qemu" } else { "C:\msys64\clangarm64\share\qemu" }
+    $msysBin = "C:\msys64\clangarm64\bin"
+    $fwSrc   = "C:\msys64\clangarm64\share\qemu"
+    if ($msysRoot) {
+        $msysBin = Join-Path $msysRoot "clangarm64\bin"
+        $fwSrc   = Join-Path $msysRoot "clangarm64\share\qemu"
+    }
 
     $qemuExe = Join-Path $QemuBuild "qemu-system-aarch64.exe"
 
