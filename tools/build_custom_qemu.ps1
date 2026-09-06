@@ -228,6 +228,29 @@ if ($ForceRebuild -or -not (Test-Path $pcFile)) {
     Write-Host "  rutabaga_gfx_ffi already installed at $Prefix" -ForegroundColor DarkGray
 }
 
+# Ensure MinGW/LLD compatible import library aliases exist in rutabaga-prefix\lib
+$libDir = Join-Path $Prefix "lib"
+$binDll = Join-Path $Prefix "bin\rutabaga_gfx_ffi.dll"
+if ((Test-Path $binDll) -and -not (Test-Path (Join-Path $libDir "rutabaga_gfx_ffi.dll"))) {
+    Copy-Item $binDll (Join-Path $libDir "rutabaga_gfx_ffi.dll") -Force
+}
+
+$libCandidates = @(
+    (Join-Path $libDir "rutabaga_gfx_ffi.dll.lib"),
+    (Join-Path $libDir "rutabaga_gfx_ffi.lib"),
+    (Join-Path $RutabagaDir "build-ffi\ffi\rutabaga_gfx_ffi.dll.lib")
+)
+$sourceLib = ($libCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1)
+
+if ($sourceLib) {
+    Write-Host "  Ensuring MinGW/LLD rutabaga import library aliases from: $sourceLib" -ForegroundColor Green
+    foreach ($alias in @("librutabaga_gfx_ffi.dll.a", "rutabaga_gfx_ffi.lib", "librutabaga_gfx_ffi.lib", "librutabaga_gfx_ffi.a")) {
+        Copy-Item $sourceLib (Join-Path $libDir $alias) -Force
+    }
+} else {
+    Write-Warning "  rutabaga import library not found in $libDir!"
+}
+
 Write-Host "== [4/5] configuring QEMU ==" -ForegroundColor Cyan
 $buildNinja = Join-Path $BuildDir "build.ninja"
 if ($ForceRebuild -or -not (Test-Path $buildNinja)) {
@@ -314,6 +337,17 @@ cd "$msysQemu"
 Write-Host "== [5/5] building qemu-system-aarch64.exe ==" -ForegroundColor Cyan
 Push-Location $QemuDir
 try {
+    # Ensure rutabaga import libraries and DLLs are also present directly in the build directory
+    foreach ($fn in @("rutabaga_gfx_ffi.dll", "rutabaga_gfx_ffi.dll.lib", "librutabaga_gfx_ffi.dll.a", "rutabaga_gfx_ffi.lib", "librutabaga_gfx_ffi.lib", "librutabaga_gfx_ffi.a")) {
+        foreach ($srcDir in @((Join-Path $Prefix "lib"), (Join-Path $Prefix "bin"), (Join-Path $RutabagaDir "build-ffi\ffi"))) {
+            $candidate = Join-Path $srcDir $fn
+            if (Test-Path $candidate) {
+                Copy-Item $candidate $BuildDir -Force -ErrorAction SilentlyContinue
+                break
+            }
+        }
+    }
+
     Invoke-Ninja -C build qemu-system-aarch64.exe
 } catch {
     Write-Host "=== QEMU ninja build failed ===" -ForegroundColor Red
