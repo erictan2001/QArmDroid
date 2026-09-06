@@ -234,7 +234,6 @@ if ($ForceRebuild -or -not (Test-Path $pcFile)) {
 }
 
 Write-Host "== [4/5] configuring QEMU ==" -ForegroundColor Cyan
-New-Item -ItemType Directory -Force -Path $BuildDir | Out-Null
 $buildNinja = Join-Path $BuildDir "build.ninja"
 if ($ForceRebuild -or -not (Test-Path $buildNinja)) {
     Push-Location $QemuDir
@@ -242,10 +241,20 @@ if ($ForceRebuild -or -not (Test-Path $buildNinja)) {
         if (Test-Path (Join-Path $BuildDir "meson-info")) {
             Invoke-Meson setup build --reconfigure -Dvnc=enabled -Dpixman=enabled -Drutabaga_gfx=enabled
         } else {
-            # Ensure keycodemapdb submodule is present
-            if (-not (Test-Path (Join-Path $QemuDir "subprojects\keycodemapdb\README"))) {
-                git submodule update --init --depth 1 subprojects/keycodemapdb
+            # Remove incomplete build directory so QEMU's ./configure can create it cleanly
+            if (Test-Path $BuildDir) {
+                Write-Host "  Removing incomplete build dir $BuildDir..." -ForegroundColor DarkGray
+                Remove-Item -Recurse -Force $BuildDir -ErrorAction SilentlyContinue
             }
+
+            # Ensure keycodemapdb is present
+            $kdbDir = Join-Path $QemuDir "subprojects\keycodemapdb"
+            if (-not (Test-Path (Join-Path $kdbDir "data"))) {
+                Write-Host "  Fetching keycodemapdb..." -ForegroundColor DarkGray
+                if (Test-Path $kdbDir) { Remove-Item -Recurse -Force $kdbDir -ErrorAction SilentlyContinue }
+                git clone --depth 1 https://gitlab.com/qemu-project/keycodemapdb.git $kdbDir
+            }
+
             $shExe = if (Test-Path $binSh) {
                 $binSh
             } elseif (Test-Path (Join-Path $usrBin "sh.exe")) {
@@ -256,8 +265,14 @@ if ($ForceRebuild -or -not (Test-Path $buildNinja)) {
                 "sh"
             }
             Write-Host "  Running QEMU configure using $shExe..." -ForegroundColor Cyan
+
+            # Explicitly specify clang and clang++ so QEMU builds with MinGW-w64 Clang
+            $clangExe = (Join-Path $clangBin "clang.exe").Replace('\', '/')
+            $clangxxExe = (Join-Path $clangBin "clang++.exe").Replace('\', '/')
             $cfgArgs = @(
                 "./configure",
+                "--cc=$clangExe",
+                "--cxx=$clangxxExe",
                 "--target-list=aarch64-softmmu",
                 "--without-default-features",
                 "--enable-tcg",

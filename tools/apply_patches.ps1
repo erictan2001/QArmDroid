@@ -63,15 +63,15 @@ function Apply-GitPatch($repoDir, $patchFile, $label) {
     # fall back to --ignore-space-change (applies the real hunks only).
     Push-Location $repoDir
     try {
-        $check = git apply --check $patchFile 2>&1
+        $check = git apply --check --whitespace=nowarn $patchFile 2>&1
         if ($LASTEXITCODE -eq 0) {
-            git apply $patchFile 2>&1
+            git apply --whitespace=nowarn $patchFile 2>&1
             Write-Host "[patch] $label applied (git apply)." -ForegroundColor Green
         } else {
             Write-Host "[patch] $label clean apply failed - trying --ignore-space-change..." -ForegroundColor Yellow
-            $check2 = git apply --check --ignore-space-change $patchFile 2>&1
+            $check2 = git apply --check --whitespace=nowarn --ignore-space-change $patchFile 2>&1
             if ($LASTEXITCODE -eq 0) {
-                git apply --ignore-space-change $patchFile 2>&1
+                git apply --whitespace=nowarn --ignore-space-change $patchFile 2>&1
                 Write-Host "[patch] $label applied (--ignore-space-change)." -ForegroundColor Green
             } else {
                 Write-Warning "${label}: patch could NOT be applied cleanly. Check repo state."
