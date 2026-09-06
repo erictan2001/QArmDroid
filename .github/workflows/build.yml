@@ -97,6 +97,8 @@ jobs:
           update: true
           cache: true
           install: >-
+            diffutils
+            mingw-w64-clang-aarch64-diffutils
             mingw-w64-clang-aarch64-clang
             mingw-w64-clang-aarch64-meson
             mingw-w64-clang-aarch64-ninja

@@ -64,6 +64,15 @@ if (-not (Get-Command meson -ErrorAction SilentlyContinue) -or -not (Get-Command
     }
 }
 
+# Ensure diff program is present (required by QEMU tests/qapi-schema/meson.build)
+if (-not (Get-Command diff.exe -ErrorAction SilentlyContinue) -and -not (Get-Command diff -ErrorAction SilentlyContinue)) {
+    $pacmanExe = Join-Path $usrBin "pacman.exe"
+    if (Test-Path $pacmanExe) {
+        Write-Host "  Installing diffutils via pacman..." -ForegroundColor Yellow
+        & $pacmanExe -S --noconfirm --needed diffutils mingw-w64-clang-aarch64-diffutils
+    }
+}
+
 # Clean any broken/shadowing sh.exe or link.exe in GfxDir\bin
 $binDir = Join-Path $GfxDir "bin"
 if (Test-Path $binDir) {
