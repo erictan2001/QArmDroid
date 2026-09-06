@@ -1,12 +1,13 @@
 <#
 .SYNOPSIS
-    Integrate Google Play Store & Google Play Services into QArmDroid Android 16 guest.
+    Integrate official Google Play Store & Google Play Services into QArmDroid Android 16 guest.
 
 .DESCRIPTION
-    Automates connecting to the Android guest via ADB, downloading Google Play
-    compatible components (microG GmsCore, Phonesky Play Store companion, and
-    Aurora Store Play Store client), pushing/installing them via adb install,
-    granting necessary permissions, and verifying installation.
+    Automates connecting to the Android guest via ADB, downloading official NikGapps Core
+    for Android 16 ARM64 (Google Play Store Phonesky, Google Play Services GmsCore,
+    and Google Services Framework GSF), injecting them as privileged system applications
+    (/product/priv-app/), pushing system permission whitelists and configurations,
+    and reloading the system framework to activate the official Google Play Store.
 
 .PARAMETER AdbPath
     Path to adb executable. If empty, auto-detects from bundled directories or PATH.
@@ -84,14 +85,14 @@ $isConnected = ($state -eq "device")
 # 3. Check existing package installations
 $playStoreInstalled = $false
 $playServicesInstalled = $false
-$auroraStoreInstalled = $false
+$gsfInstalled = $false
 $gsfId = ""
 
 if ($isConnected) {
     $packages = & $AdbPath -s $Target shell pm list packages 2>$null
     if ($packages -match "com\.android\.vending") { $playStoreInstalled = $true }
-    if ($packages -match "com\.google\.android\.gms" -or $packages -match "org\.microg\.gms") { $playServicesInstalled = $true }
-    if ($packages -match "com\.aurora\.store") { $auroraStoreInstalled = $true }
+    if ($packages -match "com\.google\.android\.gms") { $playServicesInstalled = $true }
+    if ($packages -match "com\.google\.android\.gsf") { $gsfInstalled = $true }
 
     try {
         $gsfQuery = & $AdbPath -s $Target shell "content query --uri content://com.google.android.gsf.gservices --where `"name='android_id'`"" 2>$null
@@ -106,7 +107,8 @@ if ($CheckOnly) {
         connected              = $isConnected
         play_store_installed   = $playStoreInstalled
         play_services_installed= $playServicesInstalled
-        aurora_store_installed = $auroraStoreInstalled
+        aurora_store_installed = $false
+        gsf_installed          = $gsfInstalled
         installed              = ($playStoreInstalled -and $playServicesInstalled)
         gsf_id                 = $gsfId
     }
@@ -136,86 +138,191 @@ if ($bootCompleted -ne "1") {
 }
 
 if ($playStoreInstalled -and $playServicesInstalled -and -not $Force) {
-    Emit-Progress 100 "Google Play Store already integrated" "Play Store and Services detected."
-    Write-Host "Play Store and Google Play Services already present on device."
+    Emit-Progress 100 "Google Play Store already integrated" "Official Google Play Store and Services detected."
+    Write-Host "Official Google Play Store and Services already present on device."
     exit 0
 }
 
 $cacheDir = Join-Path $env:LOCALAPPDATA "QArmDroid\playstore_cache"
 New-Item -ItemType Directory -Force -Path $cacheDir | Out-Null
 
-Emit-Progress 25 "Preparing Google components" "Fetching component download links..."
-
-$gmsApk = Join-Path $cacheDir "com.google.android.gms.apk"
-$gmsUrl = "https://github.com/microg/GmsCore/releases/download/v0.3.16.252432/com.google.android.gms-252432032.apk"
-
-$vendingApk = Join-Path $cacheDir "com.android.vending.apk"
-$vendingUrl = "https://github.com/microg/GmsCore/releases/download/v0.3.16.252432/com.android.vending-84022632.apk"
-
-$auroraApk = Join-Path $cacheDir "com.aurora.store.apk"
-$auroraUrl = "https://f-droid.org/repo/com.aurora.store_63.apk"
-
-$downloads = @(
-    @{ Name = "Google Play Services (microG GmsCore)"; Path = $gmsApk; Url = $gmsUrl; Pct = 35 },
-    @{ Name = "Google Play Store Companion (Phonesky)"; Path = $vendingApk; Url = $vendingUrl; Pct = 50 },
-    @{ Name = "Google Play Store Client (Aurora Store)"; Path = $auroraApk; Url = $auroraUrl; Pct = 65 }
+$gappsZip = Join-Path $cacheDir "NikGapps-core-arm64-16.zip"
+$localCandidates = @(
+    (Join-Path $PSScriptRoot "..\work\gapps\nikgapps-core.zip"),
+    (Join-Path $PSScriptRoot "gapps\nikgapps-core.zip"),
+    (Join-Path $PSScriptRoot "nikgapps-core.zip"),
+    (Join-Path (Get-Location) "work\gapps\nikgapps-core.zip")
 )
+foreach ($cand in $localCandidates) {
+    if ($cand -and (Test-Path $cand)) {
+        if (-not (Test-Path $gappsZip) -or ((Get-Item $gappsZip).Length -lt 50000000)) {
+            Copy-Item -Force $cand $gappsZip
+        }
+        break
+    }
+}
 
-foreach ($item in $downloads) {
-    if ($Force -or -not (Test-Path $item.Path) -or ((Get-Item $item.Path).Length -lt 100000)) {
-        Emit-Progress $item.Pct "Downloading $($item.Name)" "Fetching $($item.Name)..."
+$gappsUrl = "https://downloads.sourceforge.net/project/nikgapps/Releases/Android-16/22-Feb-2026/NikGapps-core-arm64-16-20260222-signed.zip"
+
+if ($Force -or -not (Test-Path $gappsZip) -or ((Get-Item $gappsZip).Length -lt 50000000)) {
+    Emit-Progress 20 "Preparing Google components" "Locating official Google Apps package for Android 16..."
+    Emit-Progress 30 "Downloading Google Play Store" "Downloading official NikGapps Core package (134 MB)..."
+    
+    $downloadSuccess = $false
+    $curlCmd = Get-Command curl.exe -ErrorAction SilentlyContinue
+    if ($curlCmd) {
+        Write-Host "Downloading via curl from $gappsUrl..."
+        & $curlCmd.Source -L --fail --show-error -o $gappsZip $gappsUrl 2>&1 | Out-Null
+        if ((Test-Path $gappsZip) -and ((Get-Item $gappsZip).Length -gt 50000000)) {
+            $downloadSuccess = $true
+        }
+    }
+    if (-not $downloadSuccess) {
         try {
-            Invoke-WebRequest -Uri $item.Url -OutFile $item.Path -UseBasicParsing -TimeoutSec 60
+            Write-Host "Downloading via Invoke-WebRequest..."
+            Invoke-WebRequest -Uri $gappsUrl -OutFile $gappsZip -UseBasicParsing -TimeoutSec 180
+            if ((Test-Path $gappsZip) -and ((Get-Item $gappsZip).Length -gt 50000000)) {
+                $downloadSuccess = $true
+            }
         } catch {
-            Write-Warning "Failed to download $($item.Name): $_"
+            Write-Warning "Failed to download GApps: $_"
+        }
+    }
+    
+    if (-not $downloadSuccess) {
+        Emit-Progress 0 "ERROR: Download failed" "Could not download official Google Play Store package."
+        Write-Error "Google Play Store package download failed."
+        exit 1
+    }
+}
+
+Emit-Progress 55 "Extracting Google Apps" "Unpacking Google Play Store, Play Services, and GSF..."
+$extractDir = Join-Path $cacheDir "extracted"
+New-Item -ItemType Directory -Force -Path $extractDir | Out-Null
+
+$coreSubZips = @("GooglePlayStore.zip", "GmsCore.zip", "GoogleServicesFramework.zip", "ExtraFiles.zip")
+$tarCmd = Get-Command tar.exe -ErrorAction SilentlyContinue
+
+if ($tarCmd) {
+    foreach ($sz in $coreSubZips) {
+        & $tarCmd.Source -xf $gappsZip -C $extractDir "AppSet/Core/$sz" 2>$null | Out-Null
+        $szPath = Join-Path $extractDir "AppSet\Core\$sz"
+        if (Test-Path $szPath) {
+            & $tarCmd.Source -xf $szPath -C $extractDir 2>$null | Out-Null
+        }
+    }
+} else {
+    $tempAll = Join-Path $extractDir "all"
+    Expand-Archive -Path $gappsZip -DestinationPath $tempAll -Force
+    foreach ($sz in $coreSubZips) {
+        $sub = Join-Path $tempAll "AppSet\Core\$sz"
+        if (Test-Path $sub) {
+            Expand-Archive -Path $sub -DestinationPath $extractDir -Force
         }
     }
 }
 
-if (-not (Test-Path $gmsApk) -or ((Get-Item $gmsApk).Length -lt 100000)) {
-    Emit-Progress 0 "ERROR: Download failed" "Could not download Google Play Services APK."
-    Write-Error "Google Play Services APK missing."
+$phoneskyApk = Get-ChildItem (Join-Path $extractDir "___priv-app___Phonesky\*.apk") -ErrorAction SilentlyContinue | Select-Object -First 1
+$gmsApk = Get-ChildItem (Join-Path $extractDir "___priv-app___PrebuiltGmsCore*\*.apk") -ErrorAction SilentlyContinue | Select-Object -First 1
+$gsfApk = Get-ChildItem (Join-Path $extractDir "___priv-app___GoogleServicesFramework\*.apk") -ErrorAction SilentlyContinue | Select-Object -First 1
+
+if (-not $phoneskyApk -or -not $gmsApk -or -not $gsfApk) {
+    Emit-Progress 0 "ERROR: Extraction failed" "One or more core Google APKs missing from package."
+    Write-Error "Core Google APKs missing."
     exit 1
 }
 
-Emit-Progress 70 "Installing Google Play Services" "Installing microG GmsCore (com.google.android.gms)..."
-$installGms = & $AdbPath -s $Target install -r -d -g $gmsApk 2>&1
-Write-Host "GMS Install output: $installGms"
+# Attempt Privileged System App Injection via OverlayFS (adb root + adb remount)
+Emit-Progress 70 "Configuring Privileged System Injection" "Requesting root access and remounting..."
+& $AdbPath -s $Target root 2>&1 | Out-Null
+Start-Sleep -Seconds 1
+& $AdbPath connect $Target 2>$null | Out-Null
+Start-Sleep -Seconds 1
 
-if (Test-Path $vendingApk) {
-    Emit-Progress 80 "Installing Play Store Companion" "Installing Phonesky (com.android.vending)..."
-    $installVending = & $AdbPath -s $Target install -r -d -g $vendingApk 2>&1
-    Write-Host "Vending Install output: $installVending"
+& $AdbPath -s $Target shell "setprop fs_mgr.overlayfs.data_scratch_size_mb 400" 2>$null
+$null = & $AdbPath -s $Target remount product 2>&1
+$isWritable = (& $AdbPath -s $Target shell "touch /product/priv-app/.test 2>/dev/null && rm -f /product/priv-app/.test && echo WRITABLE" 2>$null) -match "WRITABLE"
+if (-not $isWritable) {
+    $null = & $AdbPath -s $Target remount 2>&1
+    $isWritable = (& $AdbPath -s $Target shell "touch /product/priv-app/.test 2>/dev/null && rm -f /product/priv-app/.test && echo WRITABLE" 2>$null) -match "WRITABLE"
+}
+# Ensure /system is unmounted from overlayfs so its reported capacity stays at ~725 MB erofs
+# instead of reflecting the scratch filesystem size (which would cause AOSP to round up to 16 GB).
+& $AdbPath -s $Target shell "grep -q 'overlay on /system ' /proc/mounts && umount -l /system 2>/dev/null || true" 2>$null | Out-Null
+
+if (-not $isWritable) {
+    Emit-Progress 0 "ERROR: System partition not writable" "OverlayFS remount failed. Ensure system is running with root and permissive SELinux."
+    Write-Error "System partition not writable."
+    exit 1
 }
 
-if (Test-Path $auroraApk) {
-    Emit-Progress 88 "Installing Google Play Store Client" "Installing Aurora Store client..."
-    $installAurora = & $AdbPath -s $Target install -r -d -g $auroraApk 2>&1
-    Write-Host "Aurora Store Install output: $installAurora"
+# Clean up legacy Aurora Store if previously present
+& $AdbPath -s $Target shell "rm -rf /product/priv-app/AuroraStore; pm uninstall com.aurora.store 2>/dev/null" 2>$null | Out-Null
+
+Emit-Progress 75 "Injecting Privileged Permissions" "Pushing system permission whitelist and configs..."
+& $AdbPath -s $Target shell "mkdir -p /product/etc/permissions /product/etc/sysconfig /product/etc/default-permissions /product/framework /product/priv-app/Phonesky /product/priv-app/PrebuiltGmsCore /product/priv-app/GoogleServicesFramework" 2>$null
+
+Get-ChildItem (Join-Path $extractDir "___etc___permissions\*.xml") -ErrorAction SilentlyContinue | ForEach-Object {
+    & $AdbPath -s $Target push $_.FullName "/product/etc/permissions/$($_.Name)" 2>&1 | Out-Null
+}
+Get-ChildItem (Join-Path $extractDir "___etc___sysconfig\*.xml") -ErrorAction SilentlyContinue | ForEach-Object {
+    & $AdbPath -s $Target push $_.FullName "/product/etc/sysconfig/$($_.Name)" 2>&1 | Out-Null
+}
+Get-ChildItem (Join-Path $extractDir "___etc___default-permissions\*.xml") -ErrorAction SilentlyContinue | ForEach-Object {
+    & $AdbPath -s $Target push $_.FullName "/product/etc/default-permissions/$($_.Name)" 2>&1 | Out-Null
+}
+$mapsJar = Join-Path $extractDir "___framework\com.google.android.maps.jar"
+if (Test-Path $mapsJar) {
+    & $AdbPath -s $Target push $mapsJar "/product/framework/com.google.android.maps.jar" 2>&1 | Out-Null
 }
 
-Emit-Progress 94 "Configuring system permissions" "Granting background and location permissions..."
+Emit-Progress 80 "Injecting Google Services Framework" "Pushing GoogleServicesFramework to /product/priv-app..."
+& $AdbPath -s $Target push $gsfApk.FullName "/product/priv-app/GoogleServicesFramework/GoogleServicesFramework.apk" 2>&1 | Out-Null
+
+Emit-Progress 85 "Injecting Google Play Services" "Pushing PrebuiltGmsCore to /product/priv-app..."
+& $AdbPath -s $Target push $gmsApk.FullName "/product/priv-app/PrebuiltGmsCore/PrebuiltGmsCore.apk" 2>&1 | Out-Null
+
+Emit-Progress 90 "Injecting Google Play Store" "Pushing Phonesky to /product/priv-app..."
+& $AdbPath -s $Target push $phoneskyApk.FullName "/product/priv-app/Phonesky/Phonesky.apk" 2>&1 | Out-Null
+
+Emit-Progress 93 "Applying Security Contexts" "Configuring permissions and SELinux..."
+& $AdbPath -s $Target shell "chmod 755 /product/priv-app/* && chmod 644 /product/priv-app/*/*.apk /product/etc/permissions/* /product/etc/sysconfig/* /product/etc/default-permissions/* /product/framework/* 2>/dev/null && chown -R root:root /product/priv-app /product/etc /product/framework && restorecon -R /product/priv-app /product/etc /product/framework && sync" 2>$null
+
+Emit-Progress 96 "Activating Google Play Services" "Reloading system framework to register official Play Store..."
+& $AdbPath -s $Target shell "setprop ctl.restart zygote" 2>&1 | Out-Null
+
+# Wait for boot completion after zygote reload
+$bootSuccess = $false
+for ($i = 0; $i -lt 25; $i++) {
+    Start-Sleep -Seconds 2
+    & $AdbPath connect $Target 2>$null | Out-Null
+    $b = (& $AdbPath -s $Target shell getprop sys.boot_completed 2>$null).Trim()
+    if ($b -eq "1") {
+        $bootSuccess = $true
+        break
+    }
+}
+& $AdbPath -s $Target shell "grep -q 'overlay on /system ' /proc/mounts && umount -l /system 2>/dev/null || true" 2>$null | Out-Null
+
+Emit-Progress 98 "Configuring system permissions" "Granting background and runtime permissions..."
 & $AdbPath -s $Target shell pm grant com.google.android.gms android.permission.ACCESS_FINE_LOCATION 2>$null | Out-Null
 & $AdbPath -s $Target shell pm grant com.google.android.gms android.permission.ACCESS_COARSE_LOCATION 2>$null | Out-Null
 & $AdbPath -s $Target shell pm grant com.google.android.gms android.permission.POST_NOTIFICATIONS 2>$null | Out-Null
 & $AdbPath -s $Target shell pm grant com.android.vending android.permission.POST_NOTIFICATIONS 2>$null | Out-Null
-& $AdbPath -s $Target shell pm grant com.aurora.store android.permission.POST_NOTIFICATIONS 2>$null | Out-Null
 
 & $AdbPath -s $Target shell dumpsys deviceidle whitelist +com.google.android.gms 2>$null | Out-Null
 & $AdbPath -s $Target shell dumpsys deviceidle whitelist +com.android.vending 2>$null | Out-Null
-& $AdbPath -s $Target shell dumpsys deviceidle whitelist +com.aurora.store 2>$null | Out-Null
-
-& $AdbPath -s $Target shell am broadcast -a org.microg.gms.settings.CHECK_SETTINGS 2>$null | Out-Null
 
 $finalPackages = & $AdbPath -s $Target shell pm list packages 2>$null
-$isGms = ($finalPackages -match "com\.google\.android\.gms" -or $finalPackages -match "org\.microg\.gms")
+$hasVending = ($finalPackages -match "com\.android\.vending")
+$hasGms = ($finalPackages -match "com\.google\.android\.gms")
 
-if ($isGms) {
-    Emit-Progress 100 "Google Play Store integration complete!" "Google Play Services and Store components successfully installed."
+if ($hasVending -and $hasGms) {
+    Emit-Progress 100 "Google Play Store integration complete!" "Official Google Play Store, Google Play Services, and GSF are active!"
     Write-Host "Integration succeeded!" -ForegroundColor Green
     exit 0
 } else {
-    Emit-Progress 0 "ERROR: Installation verification failed" "Google Play Services was not detected in package manager."
+    Emit-Progress 0 "ERROR: Installation verification failed" "Google Play Store was not detected in package manager."
     Write-Error "Verification failed."
     exit 1
 }

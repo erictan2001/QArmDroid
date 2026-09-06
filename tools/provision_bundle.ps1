@@ -201,88 +201,119 @@ if ($needSync) {
     Write-Host "runtime already provisioned (use -Force to re-sync)" -ForegroundColor DarkGray
 }
 
-# Always keep runtime tools (scripts) synchronized
+# Synchronize tools from source only if destination file is missing or source is strictly newer
 if (Test-Path $toolsSrc) {
-    Copy-Item (Join-Path $toolsSrc "*.ps1") $toolsDst -Force -ErrorAction SilentlyContinue
-    Copy-Item (Join-Path $toolsSrc "*.py") $toolsDst -Force -ErrorAction SilentlyContinue
+    Get-ChildItem -Path $toolsSrc -Include *.ps1, *.py | ForEach-Object {
+        $dst = Join-Path $toolsDst $_.Name
+        if (-not (Test-Path $dst) -or ($_.LastWriteTime -gt (Get-Item $dst).LastWriteTime)) {
+            Copy-Item $_.FullName $dst -Force -ErrorAction SilentlyContinue
+        }
+    }
 }
 
-# --------------------------------------------------------------- disk.raw --- #
+# --------------------------------------------------------------- disk.raw & userdata.raw --- #
 $disk = Join-Path $imgDst "disk.raw"
+$userdataDisk = Join-Path $imgDst "userdata.raw"
 $superImg = Join-Path $imgDst "super.img"
 
-$needDiskBuild = $false
-if ($SkipDisk) {
-    $needDiskBuild = $false
-} elseif ($Force -or $RebuildDisk -or -not (Test-Path $disk)) {
-    $needDiskBuild = $true
-    Write-Host "Disk build required (Force: $Force, RebuildDisk: $RebuildDisk, Present: $(Test-Path $disk))" -ForegroundColor Cyan
-} else {
-    # Check if existing disk.raw physical size matches requested $DiskSizeGB
-    # disk.raw layout: super (~8.59 GB) + boot partitions (~305 MB) + $DiskSizeGB
-    $diskLen = (Get-Item $disk).Length
-    $expectedApprox = ([int64]$DiskSizeGB * 1GB) + 8895000000
-    $diff = [Math]::Abs($diskLen - $expectedApprox)
-    if ($diff -gt 500MB) {
-        Write-Host "disk.raw length ($([Math]::Round($diskLen/1GB, 2)) GB) differs from target ($DiskSizeGB GB userdata) -> rebuilding" -ForegroundColor Yellow
-        $needDiskBuild = $true
-    }
+$needOsDiskBuild = $false
+$needUserdataBuild = $false
 
+if ($SkipDisk) {
+    # do nothing
+} elseif ($Force) {
+    $needOsDiskBuild = $true
+    $needUserdataBuild = $true
+    Write-Host "Force rebuild requested -> rebuilding both OS disk and userdata" -ForegroundColor Cyan
+} elseif ($RebuildDisk) {
+    # User requested rebuild of userdata disk
+    $needUserdataBuild = $true
+    # Also check if OS disk needs upgrade/rebuild (if missing or old > 10GB composite)
+    if (-not (Test-Path $disk) -or ((Get-Item $disk).Length -gt 10GB) -or ((Get-Item $disk).Length -lt 8GB)) {
+        $needOsDiskBuild = $true
+    }
+} else {
+    # Check OS disk (expected ~8.9 GB)
+    if (-not (Test-Path $disk) -or ((Get-Item $disk).Length -gt 10GB) -or ((Get-Item $disk).Length -lt 8GB)) {
+        Write-Host "OS disk.raw missing or requires update -> building standalone OS disk" -ForegroundColor Yellow
+        $needOsDiskBuild = $true
+    }
+    # Check userdata disk
+    if (-not (Test-Path $userdataDisk)) {
+        $needUserdataBuild = $true
+    } else {
+        $uLen = (Get-Item $userdataDisk).Length
+        $partBytes = [Math]::Max([int64]1000000000, [int64]$DiskSizeGB * 1000000000 - 800000000)
+        $expectedU = 2048 * 512 + $partBytes + 2048 * 512
+        if ([Math]::Abs($uLen - $expectedU) -gt 200MB) {
+            Write-Host "userdata.raw length ($([Math]::Round($uLen/1GB, 2)) GB) differs from target ($DiskSizeGB GB) -> rebuilding" -ForegroundColor Yellow
+            $needUserdataBuild = $true
+        }
+    }
     # Also check userdata.fstype
     $fsTypeFile = Join-Path $imgDst "userdata.fstype"
     if (Test-Path $fsTypeFile) {
         $curFs = (Get-Content $fsTypeFile -Raw).Trim().ToLower()
         if ($curFs -and $curFs -ne $FsFormat) {
-            Write-Host "disk.raw fstype ($curFs) differs from target ($FsFormat) -> rebuilding" -ForegroundColor Yellow
-            $needDiskBuild = $true
+            Write-Host "userdata.raw fstype ($curFs) differs from target ($FsFormat) -> rebuilding" -ForegroundColor Yellow
+            $needUserdataBuild = $true
         }
     }
 }
 
-if (-not $needDiskBuild) {
-    Write-Host "disk.raw present with matching config ($DiskSizeGB GB, $FsFormat): $disk" -ForegroundColor Green
+if (-not $needOsDiskBuild -and -not $needUserdataBuild) {
+    Write-Host "Disks present with matching config ($DiskSizeGB GB, $FsFormat): $disk and $userdataDisk" -ForegroundColor Green
     Emit-Progress 100 "Image already provisioned"
 } else {
-    # Ensure super.img is present in the runtime image dir (the sync block
-    # above copies it only when $needSync; copy it here too so a rebuild that
-    # skips the QEMU re-sync still has its input).
-    if (-not (Test-Path $superImg) -and (Test-Path (Join-Path $imgSrc "super.img"))) {
-        Copy-Item (Join-Path $imgSrc "super.img") $superImg -Force
-    }
-    if (-not (Test-Path $superImg)) {
-        Emit-Progress 0 "ERROR: super.img missing"
-        Write-Error "super.img missing in $imgDst (and $imgSrc) - cannot build disk.raw"
-        exit 1
-    }
-    Emit-Progress 60 ("Building disk.raw ($DiskSizeGB GB, $FsFormat)")
-    Write-Host "== building disk.raw (this takes a while) ==" -ForegroundColor Cyan
     Push-Location $toolsDst
     try {
         $py = Join-Path $toolsDst "..\python\python.exe"
         $env:QARM_DISK_GB = "$DiskSizeGB"
         $env:QARM_FS = "$FsFormat"
-        # Stage 1: unsparse super.img -> super_raw.img (input to the disk GPT).
-        # Stage 2: assemble the GPT disk.raw from super_raw.img + boot images.
-        $stages = @("super", "disk")
-        foreach ($stg in $stages) {
-            Emit-Progress 60 ("m0_build stage: $stg")
-            Write-Host "== m0_build $stg ==" -ForegroundColor Cyan
-            $cmd = @("$toolsDst\m0_build.py", $stg, "QARM_BUNDLE=$RuntimeRoot")
+
+        if ($needOsDiskBuild) {
+            if (-not (Test-Path $superImg) -and (Test-Path (Join-Path $imgSrc "super.img"))) {
+                Copy-Item (Join-Path $imgSrc "super.img") $superImg -Force
+            }
+            if (-not (Test-Path $superImg)) {
+                Emit-Progress 0 "ERROR: super.img missing"
+                Write-Error "super.img missing in $imgDst (and $imgSrc) - cannot build disk.raw"
+                exit 1
+            }
+            Emit-Progress 60 "Building OS disk (super + boot partitions)"
+            Write-Host "== building OS disk.raw ==" -ForegroundColor Cyan
+            $cmd = @("$toolsDst\m0_build.py", "disk", "QARM_BUNDLE=$RuntimeRoot")
             & $py $cmd
             if ($LASTEXITCODE -ne 0) {
-                Emit-Progress 0 ("ERROR: m0_build $stg failed (exit $LASTEXITCODE)")
-                Write-Error "m0_build $stg stage failed (exit $LASTEXITCODE)"
+                Emit-Progress 0 ("ERROR: m0_build disk failed (exit $LASTEXITCODE)")
+                Write-Error "m0_build disk stage failed (exit $LASTEXITCODE)"
+                exit 1
+            }
+        }
+
+        if ($needUserdataBuild) {
+            Emit-Progress 90 ("Building dedicated userdata.raw ($DiskSizeGB GB, $FsFormat)")
+            Write-Host "== building dedicated userdata.raw ($DiskSizeGB GB, $FsFormat) ==" -ForegroundColor Cyan
+            $cmd = @("$toolsDst\m0_build.py", "userdata", "QARM_BUNDLE=$RuntimeRoot")
+            & $py $cmd
+            if ($LASTEXITCODE -ne 0) {
+                Emit-Progress 0 ("ERROR: m0_build userdata failed (exit $LASTEXITCODE)")
+                Write-Error "m0_build userdata stage failed (exit $LASTEXITCODE)"
                 exit 1
             }
         }
     }
     finally { Pop-Location }
-    if ((Test-Path $disk) -and ((Get-Item $disk).Length -gt 0)) {
-        Emit-Progress 100 ("disk.raw built: $([Math]::Round((Get-Item $disk).Length/1GB, 2)) GB")
-        Write-Host "disk.raw built: $([Math]::Round((Get-Item $disk).Length/1GB, 2)) GB" -ForegroundColor Green
+
+    $diskOk = (Test-Path $disk) -and ((Get-Item $disk).Length -gt 0)
+    $userdataOk = (Test-Path $userdataDisk) -and ((Get-Item $userdataDisk).Length -gt 0)
+
+    if ($diskOk -and $userdataOk) {
+        Emit-Progress 100 ("Disks ready: OS disk $([Math]::Round((Get-Item $disk).Length/1GB, 2)) GB, Userdata $([Math]::Round((Get-Item $userdataDisk).Length/1GB, 2)) GB")
+        Write-Host "Disks built successfully" -ForegroundColor Green
     } else {
-        Emit-Progress 0 "ERROR: disk.raw not produced or empty"
-        Write-Error "disk.raw not produced or empty"
+        Emit-Progress 0 "ERROR: virtual disk not produced or empty"
+        Write-Error "Virtual disk not produced or empty"
         exit 1
     }
 }

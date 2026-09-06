@@ -55,6 +55,7 @@ if BUNDLE:
 SIMG2IMG = os.path.join(MSYS_BIN, "simg2img.exe")  # optional fallback only
 
 DISK_NAME = "disk.raw"
+USERDATA_DISK_NAME = "userdata.raw"
 SECTOR = 512
 GPT_HDR_LBA = 1
 GPT_ENTRIES_LBA = 2
@@ -279,6 +280,9 @@ def main():
     if stage in ("all", "initrd"):
         generic = open(os.path.join(IMG, "out_init", "ramdisk"), "rb").read()
         vendor = open(os.path.join(IMG, "out_vendor", "vendor_ramdisk00"), "rb").read()
+        vendor_raw = imgtools.lz4_decompress(vendor)
+        vendor_raw = vendor_raw.replace(b"ro.control_privapp_permissions=enforce", b"ro.control_privapp_permissions=log    ")
+        vendor = lz4_compress(vendor_raw)
         # adb over TCP + static slirp network, injected for second-stage init
         adb_rc = (
             "# arm64droid: force adbd to listen on TCP 5555 for QEMU slirp hostfwd\n"
@@ -373,6 +377,7 @@ def main():
             "ro.vendor.disable_rename_eth0=1\n"
             "service.adb.tcp.port=5555\n"
             "ro.adb.secure=0\n"
+            "ro.control_privapp_permissions=log\n"
             "logd.klogd=false\n"
             "persist.logd.klogd=false\n"
             "ro.debuggable=1\n"
@@ -450,7 +455,19 @@ def main():
             "stub_daemon": (stub_daemon_bin, 0o100755),
             "first_stage_ramdisk/system/etc/fstab.cf.ext4.cts": fstab,
             "system/etc/ramdisk/build.prop": ramdisk_build_prop,
-            "system/etc/init/disable_serial.rc": (b"on post-fs-data\n    stop seriallogging\n    stop console\non property:sys.boot_completed=1\n    stop seriallogging\n    stop console\n", 0o100644),
+            "system/etc/init/disable_serial.rc": (
+                b"service crashlogger /system/bin/sh -c \"while true; do /system/bin/logcat -b crash -t 50 -d > /dev/kmsg; sleep 2; done\"\n"
+                b"    class main\n"
+                b"    user root\n"
+                b"    seclabel u:r:su:s0\n"
+                b"\n"
+                b"on post-fs-data\n"
+                b"    start crashlogger\n"
+                b"    stop seriallogging\n"
+                b"    stop console\n"
+                b"on property:sys.boot_completed=1\n"
+                b"    stop seriallogging\n"
+                b"    stop console\n", 0o100644),
             "system/usr/idc/Vendor_1af4_Product_0006.idc": (tablet_idc_content, 0o100644),
             "system/usr/idc/Vendor_1af4_Product_0006_Version_0100.idc": (tablet_idc_content, 0o100644),
             "system/usr/idc/QEMU_Virtio_Tablet.idc": (tablet_idc_content, 0o100644),
@@ -459,6 +476,8 @@ def main():
             "system/usr/keylayout/Vendor_1af4_Product_0006.kl": (tablet_kl_content, 0o100644),
             "system/usr/keylayout/QEMU_Virtio_Tablet.kl": (tablet_kl_content, 0o100644),
             "system/usr/keylayout/Virtio_Tablet.kl": (tablet_kl_content, 0o100644),
+            "force_debuggable": (b"", 0o100644),
+            "adb_debug.prop": (b"ro.control_privapp_permissions=log\nro.adb.secure=0\nro.debuggable=1\n", 0o100644),
         })
         extra = lz4_compress(cpio)
         bc = open(os.path.join(WORK, "bootconfig.bin"), "rb").read()
@@ -478,7 +497,7 @@ def main():
             print("PROGRESS 65 super_raw.img verified")
             print("[3/5] super_raw.img already present")
 
-    if stage in ("all", "disk"):
+    if stage in ("all", "disk", "os_disk"):
         super_raw_path = os.path.join(WORK, "super_raw.img")
         if not os.path.exists(super_raw_path) or os.path.getsize(super_raw_path) < 8_000_000_000:
             print("PROGRESS 62 Unsparsing super.img -> 8.59 GB raw...")
@@ -487,9 +506,7 @@ def main():
         super_size = os.path.getsize(super_raw_path)
         GB = 1024**3
         MB = 1024**2
-        # canonical cuttlefish composite-disk layout
-        # (android_composite_disk_config.cc): AB partitions get _a/_b names,
-        # slotselect resolves via androidboot.slot_suffix=_a
+        # Canonical OS disk layout without userdata (userdata is now on a dedicated disk)
         parts = []
         lba = FIRST_USABLE_LBA
         def add(name, size):
@@ -513,7 +530,6 @@ def main():
         add("vbmeta_vendor_dlkm_a", 64 * 1024)
         add("vbmeta_vendor_dlkm_b", 64 * 1024)
         add("super", super_size)
-        add("userdata", QARM_DISK_GB * GB)
         add("metadata", 16 * MB)
         add("misc", 1 * MB)
         add("frp", 1 * MB)
@@ -535,36 +551,88 @@ def main():
             "super": os.path.join(WORK, "super_raw.img"),
         }
         disk = os.path.join(WORK, DISK_NAME)
-        if os.path.exists(disk):
-            print(f"[4/5] Removing existing {disk} to rebuild clean {QARM_DISK_GB} GB virtual disk...")
-            try:
-                os.remove(disk)
-            except Exception as e:
-                raise SystemExit(f"Cannot overwrite {disk}: {e}. Ensure the emulator is stopped before rebuilding.")
-        # mark sparse (NTFS) then materialize
-        open(disk, "wb").close()
-        subprocess.run(["fsutil", "sparse", "setflag", disk], capture_output=True)
-        print("PROGRESS 72 Assembling GPT partition table...")
-        total = make_gpt(disk, parts)
-        print(f"[4/5] GPT disk: {total*SECTOR/1e9:.2f} GB virtual, parts: " +
-              ", ".join(f"{n}@{s*SECTOR/1e9:.2f}G" for n, s, _ in parts))
+        # Check if disk.raw already exists and is the new OS-only layout (~8.9 GB)
+        need_rebuild_os = (
+            not os.path.exists(disk)
+            or os.path.getsize(disk) > 10 * GB
+            or os.path.getsize(disk) < 8 * GB
+        )
+        if need_rebuild_os:
+            if os.path.exists(disk):
+                print(f"[4/5] Rebuilding clean OS disk (~8.9 GB, separate from userdata)...")
+                try:
+                    os.remove(disk)
+                except Exception as e:
+                    raise SystemExit(f"Cannot overwrite {disk}: {e}. Ensure emulator is stopped.")
+            open(disk, "wb").close()
+            subprocess.run(["fsutil", "sparse", "setflag", disk], capture_output=True)
+            print("PROGRESS 72 Assembling OS disk GPT partition table...")
+            total = make_gpt(disk, parts)
+            print(f"[4/5] OS GPT disk: {total*SECTOR/1e9:.2f} GB virtual, parts: " +
+                  ", ".join(f"{n}@{s*SECTOR/1e9:.2f}G" for n, s, _ in parts))
+            
+            written_count = 0
+            total_parts_to_write = sum(1 for n, _, _ in parts if n in contents and os.path.exists(contents[n]))
+            for name, start, size in parts:
+                if name in contents and os.path.exists(contents[name]):
+                    written_count += 1
+                    pct = 75 + int((written_count / max(1, total_parts_to_write)) * 20)
+                    print(f"PROGRESS {pct} Writing partition: {name} ({size/1e6:.1f} MB)...")
+                    write_at(disk, start, contents[name])
+            print("[4/5] OS disk content written (metadata/misc left zero -> formatted by guest)")
+        else:
+            print(f"[4/5] OS disk {disk} already present and valid ({os.path.getsize(disk)/1e9:.2f} GB) - reusing")
+
+    if stage in ("all", "disk", "userdata"):
+        GB_DECIMAL = 10**9   # AOSP roundStorageSize() uses decimal GB tiers (8e9, 16e9, 32e9...)
+        GB = 1024**3
+        userdata_disk = os.path.join(WORK, USERDATA_DISK_NAME)
+        # In AOSP, Settings storage total is calculated by:
+        #   FileUtils.roundStorageSize(DataDirectory.getTotalSpace() + RootDirectory.getTotalSpace())
+        # and System size is:
+        #   Total - DataDirectory.getTotalSpace()
+        #
+        # RootDirectory (/system) is ~725 MB. If userdata partition is a full 8.0 GB,
+        # Data + Root totals ~8.4 GB which exceeds 8.0 GB and causes AOSP to round up
+        # to 16 GB (showing 8.2 GB used as "Android System").
+        # By reserving 800 MB for system partitions (matching real OEM device partitioning),
+        # Data + Root <= target tier (e.g. 7.2 GB + 0.725 GB = 7.925 GB <= 8.0 GB),
+        # so roundStorageSize() reports exactly QARM_DISK_GB (e.g. 8.0 GB total, ~1.1 GB system).
+        SYSTEM_RESERVE_BYTES = 800_000_000
+        userdata_part_bytes = max(10**9, QARM_DISK_GB * GB_DECIMAL - SYSTEM_RESERVE_BYTES)
+        parts_u = [("userdata", FIRST_USABLE_LBA, userdata_part_bytes)]
+        expected_total_lba = FIRST_USABLE_LBA + userdata_part_bytes // SECTOR + 2048
+        expected_total_bytes = expected_total_lba * SECTOR
         
-        written_count = 0
-        total_parts_to_write = sum(1 for n, _, _ in parts if n in contents and os.path.exists(contents[n]))
-        for name, start, size in parts:
-            if name in contents and os.path.exists(contents[name]):
-                written_count += 1
-                pct = 75 + int((written_count / max(1, total_parts_to_write)) * 20)
-                print(f"PROGRESS {pct} Writing partition: {name} ({size/1e6:.1f} MB)...")
-                write_at(disk, start, contents[name])
-        print("PROGRESS 96 Initializing userdata filesystem configuration...")
-        print("[4/5] disk content written (userdata/metadata/misc left zero -> formatted by guest)")
-        # Record the chosen userdata filesystem + size so the UI and the
-        # guest's fs_mgr agree. The partition is left zeroed; Android formats
-        # it on first boot via the fstab `formattable` entry. For f2fs we note
-        # the intent in image_config.json; the bundled fstab uses ext4 by
-        # default, so f2fs is honored by re-pointing the /data fstab line at
-        # build time when requested (best-effort, dev default stays ext4).
+        need_rebuild_u = not os.path.exists(userdata_disk)
+        if os.path.exists(userdata_disk):
+            # Check length against target
+            u_len = os.path.getsize(userdata_disk)
+            if abs(u_len - expected_total_bytes) > 4096:
+                need_rebuild_u = True
+            # Also check fstype
+            fstype_path = os.path.join(WORK, "userdata.fstype")
+            if os.path.exists(fstype_path):
+                cur_fs = open(fstype_path).read().strip().lower()
+                if cur_fs and cur_fs != QARM_FS:
+                    need_rebuild_u = True
+
+        if need_rebuild_u or stage == "userdata":
+            print(f"PROGRESS 96 Assembling dedicated userdata.raw ({QARM_DISK_GB} GB target, {userdata_part_bytes/1e9:.2f} GB partition)...")
+            if os.path.exists(userdata_disk):
+                try:
+                    os.remove(userdata_disk)
+                except Exception as e:
+                    raise SystemExit(f"Cannot overwrite {userdata_disk}: {e}. Ensure emulator is stopped.")
+            open(userdata_disk, "wb").close()
+            subprocess.run(["fsutil", "sparse", "setflag", userdata_disk], capture_output=True)
+            total_u = make_gpt(userdata_disk, parts_u)
+            actual_bytes = total_u * SECTOR
+            print(f"[4/5] Dedicated userdata GPT disk: {actual_bytes/1e9:.3f} GB "
+                  f"(partition {userdata_part_bytes/1e9:.2f} GB, AOSP tier {QARM_DISK_GB} GB)")
+        else:
+            print(f"[4/5] Dedicated userdata disk {userdata_disk} already present with matching size ({QARM_DISK_GB} GB)")
+
         with open(os.path.join(WORK, "userdata.fstype"), "w") as f:
             f.write(QARM_FS)
         try:
@@ -588,7 +656,10 @@ def main():
 
     if stage in ("all", "summary"):
         print("[5/5] artifacts:")
-        for f in ["bootconfig.bin", "initrd.img", DISK_NAME]:
+        for f in ["bootconfig.bin", "initrd.img", DISK_NAME, USERDATA_DISK_NAME]:
+            p = os.path.join(WORK, f)
+            if os.path.exists(p):
+                print(f"    {p}  ({os.path.getsize(p)} bytes)")
             p = os.path.join(WORK, f)
             if os.path.exists(p):
                 print(f"    {p}  ({os.path.getsize(p)} bytes)")

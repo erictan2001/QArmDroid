@@ -258,8 +258,10 @@ fn install_resources() -> Option<PathBuf> {
 fn read_image_config() -> ImageConfig {
     let rt = runtime_root();
     let disk = rt.join("image").join("disk.raw");
+    let userdata = rt.join("image").join("userdata.raw");
     let installed = install_resources().is_some() || rt.exists();
-    let provisioned = disk.exists();
+    let disk_legacy = disk.metadata().map(|m| m.len() > 10 * 1024 * 1024 * 1024).unwrap_or(false);
+    let provisioned = disk.exists() && (userdata.exists() || disk_legacy);
 
     let mut disk_size_gb = 16u32;
     let mut fs_format = "ext4".to_string();
@@ -603,6 +605,78 @@ fn find_repo_root() -> Result<PathBuf, String> {
     Err("Could not find repository root (repo with tools\\launch.ps1, or bundled resources\\qemu).".to_string())
 }
 
+/// Find the genuine developer repository root (containing both tools/ and src-tauri/),
+/// distinct from the %LOCALAPPDATA%\QArmDroid runtime directory.
+fn find_dev_repo_root() -> Option<PathBuf> {
+    if let Ok(cwd) = std::env::current_dir() {
+        let mut curr = cwd;
+        for _ in 0..5 {
+            if curr.join("tools").join("launch.ps1").exists() && curr.join("src-tauri").exists() {
+                return Some(curr);
+            }
+            if !curr.pop() {
+                break;
+            }
+        }
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        let mut curr = exe;
+        for _ in 0..6 {
+            if curr.join("tools").join("launch.ps1").exists() && curr.join("src-tauri").exists() {
+                return Some(curr);
+            }
+            if !curr.pop() {
+                break;
+            }
+        }
+    }
+    None
+}
+
+/// Resolve a script from tools/ with self-healing synchronization from the master source
+/// (developer repo or installer resources) into %LOCALAPPDATA%\QArmDroid\tools\.
+fn resolve_tool_script(name: &str) -> Option<PathBuf> {
+    let rt = runtime_root();
+    let tools_dir = rt.join("tools");
+    let rt_script = tools_dir.join(name);
+
+    let master_src = find_dev_repo_root()
+        .map(|r| r.join("tools").join(name))
+        .filter(|p| p.exists())
+        .or_else(|| {
+            install_resources()
+                .map(|r| r.join("tools").join(name))
+                .filter(|p| p.exists())
+        });
+
+    if let Some(src) = master_src {
+        let should_sync = if !rt_script.exists() {
+            true
+        } else {
+            let sm = fs::metadata(&src).and_then(|m| m.modified()).ok();
+            let dm = fs::metadata(&rt_script).and_then(|m| m.modified()).ok();
+            match (sm, dm) {
+                (Some(sm), Some(dm)) => sm > dm,
+                _ => false,
+            }
+        };
+        if should_sync {
+            let _ = fs::create_dir_all(&tools_dir);
+            let _ = fs::copy(&src, &rt_script);
+        }
+        if rt_script.exists() {
+            return Some(rt_script);
+        }
+        return Some(src);
+    }
+
+    if rt_script.exists() {
+        Some(rt_script)
+    } else {
+        None
+    }
+}
+
 /// Apply display density and navigation mode (gesture vs 3-button) to running Android guest via ADB.
 fn apply_android_display_and_nav(tablet_mode: bool, gesture_nav: bool) {
     let adb = get_adb_path();
@@ -700,10 +774,13 @@ fn start_emulator(display_mode: Option<String>) -> Result<String, String> {
             let tools_dir = runtime_root.join("tools");
             let _ = fs::create_dir_all(&tools_dir);
             let _ = fs::copy(src, &launch_script);
-            // Also ensure provision_bundle.ps1 is present for future installs.
-            let prov_src = src.parent().unwrap().join("provision_bundle.ps1");
-            if prov_src.exists() {
-                let _ = fs::copy(&prov_src, tools_dir.join("provision_bundle.ps1"));
+            if let Some(src_parent) = src.parent() {
+                for file in &["provision_bundle.ps1", "integrate_play_store.ps1", "m0_build.py", "imgtools.py"] {
+                    let s = src_parent.join(file);
+                    if s.exists() {
+                        let _ = fs::copy(&s, tools_dir.join(file));
+                    }
+                }
             }
         }
     }
@@ -1223,12 +1300,25 @@ async fn provision_image(
     let rt_tools = rt.join("tools");
     let _ = fs::create_dir_all(&rt_tools);
 
-    // Keep scripts synchronized into runtime tools so they are never stale
+    // Keep scripts synchronized into runtime tools only if source is newer
     if let Some(ref src) = tools_src_dir {
         for name in &["provision_bundle.ps1", "m0_build.py", "imgtools.py", "launch.ps1"] {
             let src_file = src.join(name);
+            let dst_file = rt_tools.join(name);
             if src_file.exists() {
-                let _ = fs::copy(&src_file, rt_tools.join(name));
+                let should_copy = if !dst_file.exists() {
+                    true
+                } else {
+                    let s_mtime = fs::metadata(&src_file).and_then(|m| m.modified()).ok();
+                    let d_mtime = fs::metadata(&dst_file).and_then(|m| m.modified()).ok();
+                    match (s_mtime, d_mtime) {
+                        (Some(s), Some(d)) => s > d,
+                        _ => false,
+                    }
+                };
+                if should_copy {
+                    let _ = fs::copy(&src_file, &dst_file);
+                }
             }
         }
     }
@@ -1361,13 +1451,16 @@ async fn provision_image(
             last_error_msg = stderr_msg;
         }
 
-        // Wait for completion and verify disk.raw was actually produced.
+        // Wait for completion and verify virtual disks were actually produced.
         let wait_res = child.wait();
         let disk = rt_clone.join("image").join("disk.raw");
+        let userdata = rt_clone.join("image").join("userdata.raw");
         let disk_ok = disk.exists() && fs::metadata(&disk).map(|m| m.len() > 0).unwrap_or(false);
+        let userdata_ok = userdata.exists() && fs::metadata(&userdata).map(|m| m.len() > 0).unwrap_or(false);
+        let all_disks_ok = disk_ok && (userdata_ok || fs::metadata(&disk).map(|m| m.len() > 10 * 1024 * 1024 * 1024).unwrap_or(false));
 
         match wait_res {
-            Ok(s) if s.success() && !had_error && disk_ok => {
+            Ok(s) if s.success() && !had_error && all_disks_ok => {
                 emit(&ProvisionProgress {
                     percent: 100,
                     stage: "Complete".into(),
@@ -1379,8 +1472,8 @@ async fn provision_image(
             Ok(s) => {
                 let msg = if !last_error_msg.is_empty() {
                     last_error_msg
-                } else if !disk_ok {
-                    "Provisioning completed but disk.raw was not created or is empty.".to_string()
+                } else if !all_disks_ok {
+                    "Provisioning completed but virtual disks were not created or are empty.".to_string()
                 } else {
                     format!("Provisioning exited with status {}", s)
                 };
@@ -1458,8 +1551,8 @@ fn check_play_store_status() -> PlayStoreStatus {
     let pkgs_str = String::from_utf8_lossy(&pkgs_out.stdout);
 
     let play_store_installed = pkgs_str.contains("com.android.vending");
-    let play_services_installed = pkgs_str.contains("com.google.android.gms") || pkgs_str.contains("org.microg.gms");
-    let aurora_store_installed = pkgs_str.contains("com.aurora.store");
+    let play_services_installed = pkgs_str.contains("com.google.android.gms");
+    let aurora_store_installed = false;
 
     let mut gsf_id = String::new();
     let mut gsf_cmd = adb_cmd();
@@ -1495,17 +1588,12 @@ async fn integrate_play_store(app: tauri::AppHandle, force: Option<bool>) -> Res
     }
 
     let force_flag = force.unwrap_or(false);
-    let rt = runtime_root();
-    let script = rt.join("tools").join("integrate_play_store.ps1");
-    let script_path = if script.exists() {
-        script
-    } else if let Ok(repo) = find_repo_root() {
-        repo.join("tools").join("integrate_play_store.ps1")
-    } else if let Some(res) = install_resources() {
-        res.join("tools").join("integrate_play_store.ps1")
-    } else {
-        *PLAY_STORE_INTEGRATING.lock().unwrap() = false;
-        return Err("integrate_play_store.ps1 script not found".to_string());
+    let script_path = match resolve_tool_script("integrate_play_store.ps1") {
+        Some(p) => p,
+        None => {
+            *PLAY_STORE_INTEGRATING.lock().unwrap() = false;
+            return Err("integrate_play_store.ps1 script not found".to_string());
+        }
     };
 
     let adb = get_adb_path();
@@ -1604,26 +1692,19 @@ fn auto_integrate_play_store_if_needed() {
     let out = run_with_timeout(&mut pkgs_cmd, Duration::from_secs(5));
     let out_str = String::from_utf8_lossy(&out.stdout);
     if !out_str.contains("com.android.vending") {
-            let rt = runtime_root();
-            let script = rt.join("tools").join("integrate_play_store.ps1");
-            let script_path = if script.exists() {
-                script
-            } else if let Ok(repo) = find_repo_root() {
-                repo.join("tools").join("integrate_play_store.ps1")
-            } else if let Some(res) = install_resources() {
-                res.join("tools").join("integrate_play_store.ps1")
-            } else {
-                return;
-            };
-            let adb = get_adb_path();
-            let mut cmd = Command::new("powershell.exe");
-            #[cfg(windows)]
-            cmd.creation_flags(CREATE_NO_WINDOW);
-            cmd.arg("-NoProfile")
-               .arg("-ExecutionPolicy").arg("Bypass")
-               .arg("-File").arg(&script_path)
-               .arg("-AdbPath").arg(&adb);
-            let _ = cmd.spawn();
+        let script_path = match resolve_tool_script("integrate_play_store.ps1") {
+            Some(p) => p,
+            None => return,
+        };
+        let adb = get_adb_path();
+        let mut cmd = Command::new("powershell.exe");
+        #[cfg(windows)]
+        cmd.creation_flags(CREATE_NO_WINDOW);
+        cmd.arg("-NoProfile")
+           .arg("-ExecutionPolicy").arg("Bypass")
+           .arg("-File").arg(&script_path)
+           .arg("-AdbPath").arg(&adb);
+        let _ = cmd.spawn();
     }
 }
 

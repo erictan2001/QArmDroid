@@ -1311,6 +1311,15 @@ const PRESET_DISK_SIZES = [8, 16, 32, 64];
 const CORE_OPTIONS = [4, 6, 8];
 const MEMORY_OPTIONS = [4, 6, 8, 12, 16];
 
+function getAospRoundedTier(sizeGb: number): number {
+  if (sizeGb <= 4) return 4;
+  let tier = 4;
+  while (tier < sizeGb) {
+    tier <<= 1;
+  }
+  return tier;
+}
+
 function SettingsModal({
   config,
   draft,
@@ -1334,6 +1343,10 @@ function SettingsModal({
   const [activeTab, setActiveTab] = useState<"images" | "runtime" | "options" | "about">("images");
   const [isCustomSize, setIsCustomSize] = useState<boolean>(() => !PRESET_DISK_SIZES.includes(draft.sizeGb));
   const [customInputVal, setCustomInputVal] = useState<string>(draft.sizeGb.toString());
+
+  const aospTier = getAospRoundedTier(draft.sizeGb);
+  const isAospStandard = aospTier === draft.sizeGb;
+  const aospDelta = aospTier - draft.sizeGb;
 
   const handleSelectPreset = (gb: number) => {
     setIsCustomSize(false);
@@ -1481,6 +1494,43 @@ function SettingsModal({
                       </div>
                     </div>
                     <span className="custom-size-hint">Enter custom size from 4 GB to 256 GB</span>
+
+                    {/* AOSP Storage Rounding Note */}
+                    {isAospStandard ? (
+                      <div className="custom-size-aosp-note standard">
+                        <div className="aosp-note-header">
+                          <span className="aosp-note-icon">✓</span>
+                          <span>Standard Android Tier</span>
+                        </div>
+                        <p>
+                          Matches standard AOSP power-of-two storage tiers. Displays cleanly as <strong>{draft.sizeGb} GB</strong> in Android Settings with minimal system partition overhead.
+                        </p>
+                      </div>
+                    ) : (
+                      <div className="custom-size-aosp-note">
+                        <div className="aosp-note-header">
+                          <span className="aosp-note-icon">💡</span>
+                          <span>AOSP Settings Display Note:</span>
+                        </div>
+                        <p>
+                          Android Settings rounds advertised storage up to the nearest marketing tier (<strong>{aospTier} GB</strong>) and attributes the unaligned gap (<strong>~{aospDelta} GB</strong>) to <em>"Android System"</em>.
+                        </p>
+                        <p className="aosp-note-sub">
+                          Your full <strong>{draft.sizeGb} GB</strong> is physically formatted and 100% usable for guest apps and files.
+                        </p>
+                        <button
+                          type="button"
+                          className="aosp-snap-btn"
+                          disabled={provisioning}
+                          onClick={() => {
+                            setDraft((d) => ({ ...d, sizeGb: aospTier }));
+                            setCustomInputVal(aospTier.toString());
+                          }}
+                        >
+                          ⚡ Snap to {aospTier} GB (for 1:1 display in Android Settings)
+                        </button>
+                      </div>
+                    )}
                   </div>
                 )}
 
@@ -1711,7 +1761,7 @@ function SettingsModal({
                   </span>
                 </div>
                 <p className="component-desc">
-                  microG GmsCore, Phonesky, and Aurora Store client providing Google Play Store compatibility for ARM64 Android 16.
+                  Official Google Play Store (Phonesky), Google Play Services (GmsCore), and Google Services Framework (GSF) integrated directly into Android 16 system partitions.
                 </p>
                 <div className="component-path">
                   <code>{playStoreStatus.installed ? (playStoreStatus.gsf_id ? `GSF ID: ${playStoreStatus.gsf_id}` : "com.android.vending + com.google.android.gms") : "Configure in VM & Hardware tab"}</code>
@@ -1814,7 +1864,7 @@ function SettingsModal({
               <section className="config-section">
                 <span className="section-title">Google Play Store & Services</span>
                 <p className="section-help">
-                  Integrate Google Play Services (microG GmsCore), Google Play Store client (Phonesky / Aurora Store), and Google framework into the Android guest.
+                  Integrate official Google Play Services (GmsCore), Google Play Store (Phonesky), and Google Services Framework (GSF) into the Android guest.
                 </p>
                 <div className="seg-control">
                   <button

@@ -296,9 +296,20 @@ function Build-QemuArgs {
         "-smp", "$Cores,sockets=1,cores=$Cores,threads=1",
         "-object", "iothread,id=iothread0",
         "-kernel", $Kernel,
-        "-initrd", $Initrd,
+        "-initrd", $Initrd
+    )
+    $storageArgs = @(
         "-drive", "file=$Disk,format=raw,if=none,id=disk,cache=writeback,aio=threads",
-        "-device", "virtio-blk-pci,drive=disk,addr=01.0,iothread=iothread0,num-queues=4",
+        "-device", "virtio-blk-pci,drive=disk,addr=01.0,iothread=iothread0,num-queues=4"
+    )
+    $UserdataDisk = Join-Path (Split-Path $Disk -Parent) "userdata.raw"
+    if (Test-Path $UserdataDisk) {
+        $storageArgs += @(
+            "-drive", "file=$UserdataDisk,format=raw,if=none,id=userdata,cache=writeback,aio=threads",
+            "-device", "virtio-blk-pci,drive=userdata,addr=05.0,iothread=iothread0,num-queues=4"
+        )
+    }
+    $arr += $storageArgs + @(
         "-netdev", "user,id=net0,hostfwd=tcp:127.0.0.1:5555-10.0.2.15:5555,hostfwd=tcp:127.0.0.1:6666-10.0.2.15:6666",
         "-device", "virtio-net-pci,netdev=net0,addr=02.0"
     ) + $gpu + @(

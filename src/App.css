@@ -1038,6 +1038,76 @@ body, html, #root {
   color: #64748b;
 }
 
+.custom-size-aosp-note {
+  margin-top: 6px;
+  padding: 8px 10px;
+  background-color: rgba(59, 130, 246, 0.08);
+  border: 1px solid rgba(59, 130, 246, 0.25);
+  border-radius: 6px;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+
+.custom-size-aosp-note.standard {
+  background-color: rgba(34, 197, 94, 0.08);
+  border-color: rgba(34, 197, 94, 0.25);
+}
+
+.aosp-note-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 4px;
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.aosp-note-header .aosp-note-icon {
+  font-size: 13px;
+}
+
+.custom-size-aosp-note p {
+  margin: 0 0 4px 0;
+}
+
+.custom-size-aosp-note p strong {
+  color: var(--text-primary);
+}
+
+.custom-size-aosp-note .aosp-note-sub {
+  color: #94a3b8;
+  font-size: 10.5px;
+  margin-bottom: 6px;
+}
+
+.aosp-snap-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 2px;
+  padding: 4px 10px;
+  background-color: rgba(59, 130, 246, 0.15);
+  border: 1px solid rgba(59, 130, 246, 0.35);
+  border-radius: 4px;
+  color: #60a5fa;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.aosp-snap-btn:hover:not(:disabled) {
+  background-color: rgba(59, 130, 246, 0.25);
+  border-color: #60a5fa;
+  color: #93c5fd;
+}
+
+.aosp-snap-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 /* Partition Shrink / Expand Notices */
 .partition-notice {
   display: flex;

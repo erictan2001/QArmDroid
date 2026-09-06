@@ -86,4 +86,6 @@ tools/qemu-gfxstream/tools/
 tools/scrcpy/
 tools/platform-tools/
 work_sdk/
+work/gapps/
+work/*.png
 research/artifacts/

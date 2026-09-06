@@ -35,15 +35,15 @@ Start-Sleep -Milliseconds 500
 $SerialLog = Join-Path $WorkDir "serial.log"
 try { "" | Out-File -FilePath $SerialLog -Encoding ascii -Force -ErrorAction SilentlyContinue } catch {}
 
-$AppendCmdline = "console=ttyAMA0 earlycon=pl011,0x9000000 printk.devkmsg=on audit=0 panic=-1 8250.nr_uarts=4 loop.max_part=7 init=/init androidboot.boot_devices=4010000000.pcie androidboot.hardware=ranchu androidboot.hardware.egl=emulation androidboot.hardware.vulkan=ranchu androidboot.serialno=EMULATOR34 qemu=1 androidboot.qemu=1"
+$AppendCmdline = "console=ttyAMA0 earlycon=pl011,0x9000000 printk.devkmsg=on audit=0 panic=-1 8250.nr_uarts=4 loop.max_part=7 init=/init androidboot.boot_devices=3f000000.pcie androidboot.hardware=ranchu androidboot.hardware.egl=emulation androidboot.hardware.vulkan=ranchu androidboot.serialno=EMULATOR34 qemu=1 androidboot.qemu=1"
 
 $DisplayArgs = @()
 if ($DisplayMode -eq "embedded" -or $DisplayMode -eq "vnc") {
-    $DisplayArgs = @("-display", "egl-headless", "-vnc", "127.0.0.1:0,websocket=5901,lossy=off,non-adaptive=on")
+    $DisplayArgs = @("-display", "vnc=127.0.0.1:0,websocket=5901,lossy=off,non-adaptive=on")
 } elseif ($DisplayMode -eq "sdl") {
-    $DisplayArgs = @("-display", "sdl,gl=on")
+    $DisplayArgs = @("-display", "sdl")
 } else {
-    $DisplayArgs = @("-display", "egl-headless")
+    $DisplayArgs = @("-display", "none")
 }
 
 $QemuArgs = @(
@@ -55,16 +55,16 @@ $QemuArgs = @(
     "-kernel", $Kernel,
     "-initrd", $Ramdisk,
     "-drive", "if=none,id=system,file=$System,format=raw,readonly=on",
-    "-device", "virtio-blk-pci,drive=system,addr=01.0",
+    "-device", "virtio-blk-pci,drive=system,addr=01.0,romfile=",
     "-drive", "if=none,id=vendor,file=$Vendor,format=raw,readonly=on",
-    "-device", "virtio-blk-pci,drive=vendor,addr=02.0",
+    "-device", "virtio-blk-pci,drive=vendor,addr=02.0,romfile=",
     "-drive", "if=none,id=metadata,file=$EncryptionKey,format=raw,readonly=on",
-    "-device", "virtio-blk-pci,drive=metadata,addr=03.0",
+    "-device", "virtio-blk-pci,drive=metadata,addr=03.0,romfile=",
     "-drive", "if=none,id=userdata,file=$UserdataWork,format=raw",
-    "-device", "virtio-blk-pci,drive=userdata,addr=04.0",
+    "-device", "virtio-blk-pci,drive=userdata,addr=04.0,romfile=",
     "-netdev", "user,id=net0,hostfwd=tcp:127.0.0.1:5555-10.0.2.15:5555",
-    "-device", "virtio-net-pci,netdev=net0,addr=05.0",
-    "-device", "virtio-gpu-gl-pci,addr=06.0,hostmem=2G,blob=on",
+    "-device", "virtio-net-pci,netdev=net0,addr=05.0,romfile=",
+    "-device", "virtio-gpu-pci,addr=06.0,xres=1280,yres=800,romfile=",
     "-device", "virtio-tablet-pci",
     "-device", "virtio-keyboard-pci",
     "-serial", "file:$SerialLog",
