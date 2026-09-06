@@ -231,44 +231,37 @@ foreach ($n in @("boot.img","init_boot.img","vendor_boot.img","vbmeta.img",
 
 # ---------------------------------------------------------------- QEMU ------ #
 if (-not $NoQemu) {
-    Write-Host "== staging QEMU ==" -ForegroundColor Cyan
+    Write-Host "== staging QEMU (custom self-built) ==" -ForegroundColor Cyan
     $msysCandidates = @($env:MSYS2_ROOT, "C:\msys64", "$env:SystemDrive\msys64")
     $msysRoot = ($msysCandidates | Where-Object { $_ -and (Test-Path (Join-Path $_ "clangarm64\bin")) } | Select-Object -First 1)
     $msysBin = if ($msysRoot) { Join-Path $msysRoot "clangarm64\bin" } else { "C:\msys64\clangarm64\bin" }
     $fwSrc = if ($msysRoot) { Join-Path $msysRoot "clangarm64\share\qemu" } else { "C:\msys64\clangarm64\share\qemu" }
 
-    $qemuExe = $null
-    $qemuType = ""
-    if (Test-Path (Join-Path $QemuBuild "qemu-system-aarch64.exe")) {
-        $qemuExe = Join-Path $QemuBuild "qemu-system-aarch64.exe"
-        $qemuType = "custom"
-    } elseif (Test-Path (Join-Path $msysBin "qemu-system-aarch64.exe")) {
-        $qemuExe = Join-Path $msysBin "qemu-system-aarch64.exe"
-        $qemuType = "msys2"
-    } elseif (Test-Path (Join-Path $env:LOCALAPPDATA "QArmDroid\qemu\qemu-system-aarch64.exe")) {
-        $qemuExe = Join-Path $env:LOCALAPPDATA "QArmDroid\qemu\qemu-system-aarch64.exe"
-        $qemuType = "runtime"
-    }
+    $qemuExe = Join-Path $QemuBuild "qemu-system-aarch64.exe"
 
-    if (-not $qemuExe -and $AutoDownload) {
-        Write-Host "  QEMU binary not found; checking for MSYS2 pacman..." -ForegroundColor Yellow
-        $pacman = if (Test-Path "C:\msys64\usr\bin\pacman.exe") { "C:\msys64\usr\bin\pacman.exe" } elseif (Get-Command pacman.exe -ErrorAction SilentlyContinue) { (Get-Command pacman.exe).Source } else { $null }
-        if ($pacman) {
-            Write-Host "  Installing mingw-w64-clang-aarch64-qemu via pacman..." -ForegroundColor Cyan
-            & $pacman -S --noconfirm --needed mingw-w64-clang-aarch64-qemu
-            if (Test-Path (Join-Path $msysBin "qemu-system-aarch64.exe")) {
-                $qemuExe = Join-Path $msysBin "qemu-system-aarch64.exe"
-                $qemuType = "msys2"
-            }
+    if (-not (Test-Path $qemuExe) -and $AutoDownload) {
+        Write-Host "  Custom QEMU not found at $qemuExe; attempting to build via build_custom_qemu.ps1..." -ForegroundColor Yellow
+        $buildScript = Join-Path $RepoRoot "tools\build_custom_qemu.ps1"
+        if (Test-Path $buildScript) {
+            & $buildScript
         }
     }
 
-    if (-not $qemuExe) {
-        Write-Error "QEMU executable not found! Neither repo custom build ($QemuBuild\qemu-system-aarch64.exe) nor MSYS2 ($msysBin\qemu-system-aarch64.exe) exists."
+    if (-not (Test-Path $qemuExe)) {
+        # Check LocalAppData runtime copy if present from earlier install
+        $localAppQemu = Join-Path $env:LOCALAPPDATA "QArmDroid\qemu\qemu-system-aarch64.exe"
+        if (Test-Path $localAppQemu) {
+            Write-Host "  Found custom QEMU in LocalAppData runtime: $localAppQemu" -ForegroundColor Green
+            $qemuExe = $localAppQemu
+        }
+    }
+
+    if (-not (Test-Path $qemuExe)) {
+        Write-Error "Custom self-built QEMU not found at $qemuExe! Stock MSYS2 QEMU cannot be used as it lacks the required custom patches (touchscreen HID digitizer, rutabaga ExternalBlob renderer-features, SDL letterbox, and VNC websocket support). Run tools\build_custom_qemu.ps1 to build it."
         exit 1
     }
 
-    Write-Host "  staged QEMU ($qemuType): $qemuExe" -ForegroundColor Green
+    Write-Host "  staged custom QEMU: $qemuExe" -ForegroundColor Green
     $qemuDst = Join-Path $ResDir "qemu"
     Copy-Item $qemuExe (Join-Path $qemuDst "qemu-system-aarch64.exe") -Force
 
@@ -277,101 +270,15 @@ if (-not $NoQemu) {
         Copy-Item $qemuImg (Join-Path $qemuDst "qemu-img.exe") -Force
     }
 
-    if ($qemuType -eq "custom") {
+    # Copy all custom build DLLs from the build directory
+    if (Test-Path $QemuBuild) {
         Get-ChildItem $QemuBuild -Filter "*.dll" | Copy-Item -Destination $qemuDst -Force
-        foreach ($dll in @("libpixman-1-0.dll","libzstd-1.dll","SDL2.dll","libslirp-0.dll")) {
-            $s = Join-Path $msysBin $dll
-            if (Test-Path $s) { Copy-Item $s $qemuDst -Force }
-        }
-    } else {
-        Write-Host "  Resolving and copying transitive DLL dependencies for MSYS2 QEMU..." -ForegroundColor DarkGray
-        $pyCmd = if (Test-Path (Join-Path $ResDir "python\python.exe")) { (Join-Path $ResDir "python\python.exe") } elseif (Get-Command python -ErrorAction SilentlyContinue) { (Get-Command python).Source } else { "python" }
-        $peScript = @"
-import os, sys, struct, shutil
+    }
 
-def get_imported_dlls(pe_path):
-    try:
-        with open(pe_path, 'rb') as f:
-            data = f.read()
-    except Exception:
-        return []
-    if len(data) < 0x40 or data[:2] != b'MZ': return []
-    pe_offset = struct.unpack('<I', data[0x3C:0x40])[0]
-    if len(data) < pe_offset + 26: return []
-    magic = struct.unpack('<H', data[pe_offset+24:pe_offset+26])[0]
-    is_64 = (magic == 0x20b)
-    data_dir_offset = pe_offset + 24 + (112 if is_64 else 96)
-    if len(data) < data_dir_offset + 16: return []
-    import_dir_rva = struct.unpack('<I', data[data_dir_offset+8:data_dir_offset+12])[0]
-    opt_header_size = struct.unpack('<H', data[pe_offset+20:pe_offset+22])[0]
-    num_sections = struct.unpack('<H', data[pe_offset+6:pe_offset+8])[0]
-    sec_offset = pe_offset + 24 + opt_header_size
-    sections = []
-    for i in range(num_sections):
-        s = data[sec_offset + i*40 : sec_offset + (i+1)*40]
-        if len(s) < 24: break
-        vsize, vaddr, rsize, roffset = struct.unpack('<IIII', s[8:24])
-        sections.append((vaddr, vsize, roffset, rsize))
-    def rva_to_offset(rva):
-        for vaddr, vsize, roffset, rsize in sections:
-            if vaddr <= rva < vaddr + max(vsize, rsize):
-                return roffset + (rva - vaddr)
-        return None
-    off = rva_to_offset(import_dir_rva)
-    if not off: return []
-    dlls = []
-    while off + 20 <= len(data):
-        entry = data[off:off+20]
-        if entry == b'\x00'*20: break
-        name_rva = struct.unpack('<I', entry[12:16])[0]
-        name_off = rva_to_offset(name_rva)
-        if name_off and name_off < len(data):
-            end = data.find(b'\x00', name_off)
-            if end != -1:
-                dlls.append(data[name_off:end].decode('ascii', 'ignore'))
-        off += 20
-    return dlls
-
-bin_dir = r'$msysBin'
-qemu_exe = r'$qemuExe'
-dst_dir = r'$qemuDst'
-visited = set()
-to_check = [qemu_exe]
-copied = 0
-
-while to_check:
-    cur = to_check.pop(0)
-    for dll in get_imported_dlls(cur):
-        dll_lower = dll.lower()
-        if dll_lower.startswith(('api-ms-', 'ext-ms-')) or dll_lower in (
-            'kernel32.dll', 'user32.dll', 'advapi32.dll', 'shell32.dll', 'ole32.dll',
-            'winmm.dll', 'ws2_32.dll', 'gdi32.dll', 'comdlg32.dll', 'version.dll',
-            'setupapi.dll', 'iphlpapi.dll', 'shlwapi.dll', 'imm32.dll', 'uxtheme.dll',
-            'crypt32.dll', 'secur32.dll', 'wininet.dll', 'dwmapi.dll', 'd3d11.dll',
-            'dxgi.dll', 'd2d1.dll', 'dwrite.dll', 'userenv.dll', 'wtsapi32.dll', 'dnsapi.dll',
-            'ncrypt.dll', 'oleaut32.dll', 'comctl32.dll', 'winspool.drv', 'opengl32.dll',
-            'hid.dll', 'msimg32.dll', 'gdiplus.dll', 'wldap32.dll', 'bcrypt.dll', 'usp10.dll',
-            'rpcrt4.dll', 'mswsock.dll', 'ntdll.dll'
-        ):
-            continue
-        cand = os.path.join(bin_dir, dll)
-        if not os.path.exists(cand):
-            for f in os.listdir(bin_dir):
-                if f.lower() == dll_lower:
-                    cand = os.path.join(bin_dir, f)
-                    break
-        if os.path.exists(cand):
-            dst = os.path.join(dst_dir, os.path.basename(cand))
-            if not os.path.exists(dst) or os.path.getsize(dst) != os.path.getsize(cand):
-                shutil.copy2(cand, dst)
-                copied += 1
-            if cand not in visited:
-                visited.add(cand)
-                to_check.append(cand)
-
-print(f'   Staged {copied} runtime DLLs ({len(visited)} total dependencies)')
-"@
-        & $pyCmd -c $peScript
+    # Pixman, zstd, SDL2, libslirp, glib runtime DLLs from MSYS2
+    foreach ($dll in @("libpixman-1-0.dll","libzstd-1.dll","SDL2.dll","libslirp-0.dll","zlib1.dll","libfdt-1.dll","libglib-2.0-0.dll","libwinpthread-1.dll","libintl-8.dll","libiconv-2.dll","libpcre2-8-0.dll")) {
+        $s = Join-Path $msysBin $dll
+        if (Test-Path $s) { Copy-Item $s $qemuDst -Force }
     }
 
     # QEMU data dir (share\qemu: ROMs + keymaps + dtb + firmware)

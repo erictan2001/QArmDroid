@@ -13,6 +13,13 @@ on:
         description: 'Publish as a GitHub Release'
         type: boolean
         default: false
+      runner:
+        description: 'Runner environment'
+        type: choice
+        options:
+          - windows-11-arm
+          - windows-latest
+        default: windows-11-arm
       target_arch:
         description: 'Tauri build target architecture'
         type: choice
@@ -30,12 +37,14 @@ permissions:
 
 jobs:
   build:
-    name: Build & Package (Windows)
-    runs-on: windows-latest
+    name: Build & Package (Windows ARM64)
+    runs-on: ${{ inputs.runner || 'windows-11-arm' }}
 
     steps:
-      - name: Checkout repository
+      - name: Checkout repository & submodules
         uses: actions/checkout@v4
+        with:
+          submodules: true
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -61,14 +70,41 @@ jobs:
       - name: Install Node dependencies
         run: npm ci
 
-      - name: Setup MSYS2 & ARM64 QEMU
+      - name: Setup MSYS2 & ARM64 build toolchain
         uses: msys2/setup-msys2@v2
         with:
           msystem: CLANGARM64
           update: true
           cache: true
           install: >-
-            mingw-w64-clang-aarch64-qemu
+            mingw-w64-clang-aarch64-clang
+            mingw-w64-clang-aarch64-meson
+            mingw-w64-clang-aarch64-ninja
+            mingw-w64-clang-aarch64-pkgconf
+            mingw-w64-clang-aarch64-glib2
+            mingw-w64-clang-aarch64-pixman
+            mingw-w64-clang-aarch64-dtc
+            mingw-w64-clang-aarch64-capstone
+            mingw-w64-clang-aarch64-libslirp
+            mingw-w64-clang-aarch64-zstd
+            mingw-w64-clang-aarch64-SDL2
+            mingw-w64-clang-aarch64-qemu-common
+
+      - name: Cache custom-patched QEMU build
+        uses: actions/cache@v4
+        id: qemu-cache
+        with:
+          path: |
+            tools/qemu-gfxstream/qemu/build/qemu-system-aarch64.exe
+            tools/qemu-gfxstream/qemu/build/*.dll
+            tools/qemu-gfxstream/rutabaga-prefix
+          key: qemu-custom-${{ hashFiles('tools/qemu-gfxstream/patches/**', 'tools/apply_patches.ps1', 'tools/build_custom_qemu.ps1') }}
+
+      - name: Build custom-patched QEMU
+        if: steps.qemu-cache.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          powershell -ExecutionPolicy Bypass -File tools/build_custom_qemu.ps1
 
       - name: Cache AOSP Cuttlefish Image Archive
         uses: actions/cache@v4
@@ -81,7 +117,7 @@ jobs:
         shell: pwsh
         run: |
           $buildId = if ("${{ inputs.build_id }}" -ne "") { "${{ inputs.build_id }}" } else { "15357239" }
-          Write-Host "Staging application resources with AOSP Build ID: $buildId"
+          Write-Host "Staging application resources with custom QEMU and AOSP Build ID: $buildId"
           powershell -ExecutionPolicy Bypass -File tools/stage_bundle.ps1 -AutoDownload -BuildId $buildId
 
       - name: Type check and build frontend
