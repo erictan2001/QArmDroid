@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import RFB from "@novnc/novnc";
+import { Icon } from "./icons";
 import "./App.css";
 
 interface EmulatorStatus {
@@ -861,7 +862,7 @@ export function App() {
       {/* Top Header / Status Bar */}
       <header className="top-header">
         <div className="brand">
-          <span className="brand-logo">🤖</span>
+          <span className="brand-logo"><Icon name="bot" /></span>
           <h2>QArmDroid</h2>
           <span
             className={`status-pill ${
@@ -872,17 +873,22 @@ export function App() {
                 : "stopped"
             }`}
           >
+            {(status.scrcpy_running || connected || status.running) ? (
+              <Icon name="dot" size={8} className="status-dot" />
+            ) : (
+              <Icon name="circle" size={8} className="status-dot" />
+            )}
             {status.scrcpy_running
-              ? "● Scrcpy Mirror Active"
+              ? "Scrcpy Mirror Active"
               : connected
-              ? "● Display Live (Embedded)"
+              ? "Display Live (Embedded)"
               : status.running && displayMode === "sdl"
-              ? "● Native SDL Window Active"
+              ? "Native SDL Window Active"
               : status.running && status.boot_completed
-              ? "● Boot Completed — Attaching Display..."
+              ? "Boot Completed — Attaching Display..."
               : status.running
-              ? "● Booting VM (WHPX)..."
-              : "○ Stopped"}
+              ? "Booting VM (WHPX)..."
+              : "Stopped"}
           </span>
         </div>
 
@@ -898,7 +904,7 @@ export function App() {
                   checked={displayMode === "scrcpy"}
                   onChange={() => setDisplayMode("scrcpy")}
                 />
-                📱 Scrcpy Mirror
+                <Icon name="smartphone" /> Scrcpy Mirror
               </label>
               <label className={`mode-label ${displayMode === "embedded" ? "active" : ""}`}>
                 <input
@@ -908,7 +914,7 @@ export function App() {
                   checked={displayMode === "embedded"}
                   onChange={() => setDisplayMode("embedded")}
                 />
-                🌐 Embedded
+                <Icon name="globe" /> Embedded
               </label>
               <label className={`mode-label ${displayMode === "sdl" ? "active" : ""}`}>
                 <input
@@ -918,34 +924,34 @@ export function App() {
                   checked={displayMode === "sdl"}
                   onChange={() => setDisplayMode("sdl")}
                 />
-                🖥️ Native SDL
+                <Icon name="monitor" /> Native SDL
               </label>
             </div>
           )}
 
           {status.adb_ready && (
             <button className="btn btn-secondary" onClick={handleLaunchScrcpy} title="Open Scrcpy mirror window with native touch">
-              📱 Open Scrcpy Mirror
+              <Icon name="smartphone" /> Open Scrcpy Mirror
             </button>
           )}
 
           {!status.running ? (
             <button className="btn btn-primary" onClick={handleStart} disabled={!imageConfig.provisioned}>
-              ▶ Launch Emulator
+              <Icon name="play" /> Launch Emulator
             </button>
           ) : (
             <button className="btn btn-danger" onClick={handleStop}>
-              ■ Stop Emulator
+              <Icon name="square" /> Stop Emulator
             </button>
           )}
 
           <button className="btn btn-secondary" onClick={openSettings} title="Emulator Settings (Runtime, Images, VM Hardware & Preferences)">
-            ⚙ Settings
+            <Icon name="settings" /> Settings
           </button>
 
           {displayMode === "embedded" && status.vnc_ready && !connected && (
             <button className="btn btn-secondary" onClick={connectVNC}>
-              🔄 Reconnect Screen
+              <Icon name="refresh" /> Reconnect Screen
             </button>
           )}
         </div>
@@ -995,17 +1001,17 @@ export function App() {
             <div className="screen-placeholder">
               {status.running && displayMode === "scrcpy" ? (
                 <div className="placeholder-content">
-                  <span className="device-icon">📱</span>
+                  <span className="device-icon"><Icon name="smartphone" /></span>
                   <h3>Scrcpy Mirror Active</h3>
                   <p>Android is streaming via low-latency hardware mirror with fluid touch.</p>
                   <p className="subtext">Use your mouse or touchscreen inside the Scrcpy window directly.</p>
                   <button className="btn btn-primary btn-large" onClick={handleLaunchScrcpy} style={{ marginTop: "16px" }}>
-                    📱 Re-open Scrcpy Window
+                    <Icon name="smartphone" /> Re-open Scrcpy Window
                   </button>
                 </div>
               ) : status.running && displayMode === "sdl" ? (
                 <div className="placeholder-content">
-                  <span className="device-icon">⚡</span>
+                  <span className="device-icon"><Icon name="zap" /></span>
                   <h3>Native GPU Window Running</h3>
                   <p>Android is rendering directly in a native SDL DirectX/OpenGL window at full 60 FPS.</p>
                   <p className="subtext">Use the toolbar on the right to send navigation and text input via ADB.</p>
@@ -1019,13 +1025,13 @@ export function App() {
                 </div>
               ) : (
                 <div className="placeholder-content">
-                  <span className="device-icon">🤖</span>
+                  <span className="device-icon"><Icon name="bot" /></span>
                   <h3>Emulator Ready</h3>
                   <p>
-                    Selected mode: <strong>{displayMode === "scrcpy" ? "📱 Scrcpy Mirror" : displayMode === "embedded" ? "🌐 In-App Embedded Canvas" : "🖥️ Native SDL Window"}</strong>
+                    Selected mode: <strong>{displayMode === "scrcpy" ? "Scrcpy Mirror" : displayMode === "embedded" ? "In-App Embedded Canvas" : "Native SDL Window"}</strong>
                   </p>
                   <button className="btn btn-primary btn-large" onClick={handleStart}>
-                    ▶ Launch Android System
+                    <Icon name="play" /> Launch Android System
                   </button>
                 </div>
               )}
@@ -1044,7 +1050,7 @@ export function App() {
                 onClick={() => sendKey("4")}
                 disabled={!isKeyControlReady}
               >
-                ◀ Back
+                <Icon name="arrowLeft" /> Back
               </button>
               <button
                 className="tool-btn"
@@ -1052,7 +1058,7 @@ export function App() {
                 onClick={() => sendKey("3")}
                 disabled={!isKeyControlReady}
               >
-                ⌂ Home
+                <Icon name="home" /> Home
               </button>
               <button
                 className="tool-btn"
@@ -1060,7 +1066,7 @@ export function App() {
                 onClick={() => sendKey("187")}
                 disabled={!isKeyControlReady}
               >
-                ▢ Recents
+                <Icon name="panels" /> Recents
               </button>
             </div>
           </div>
@@ -1074,7 +1080,7 @@ export function App() {
                 onClick={() => sendKey("24")}
                 disabled={!isKeyControlReady}
               >
-                🔊 Vol +
+                <Icon name="volumeUp" /> Vol +
               </button>
               <button
                 className="tool-btn"
@@ -1082,7 +1088,7 @@ export function App() {
                 onClick={() => sendKey("25")}
                 disabled={!isKeyControlReady}
               >
-                🔉 Vol -
+                <Icon name="volumeDown" /> Vol -
               </button>
               <button
                 className="tool-btn"
@@ -1090,7 +1096,7 @@ export function App() {
                 onClick={() => sendKey("26")}
                 disabled={!isKeyControlReady}
               >
-                ⏻ Power
+                <Icon name="power" /> Power
               </button>
             </div>
           </div>
@@ -1165,7 +1171,9 @@ export function App() {
         <div className="popup-overlay" onClick={() => setSavePopup({ visible: false, message: "" })}>
           <div className="popup-dialog" onClick={(e) => e.stopPropagation()}>
             <div className="popup-header">
-              <span className="popup-icon">{savePopup.isError ? "❌" : "✅"}</span>
+              <span className={`popup-icon ${savePopup.isError ? "err" : "ok"}`}>
+                {savePopup.isError ? <Icon name="xCircle" size={20} /> : <Icon name="checkCircle" size={20} />}
+              </span>
               <h3>{savePopup.isError ? "Error Saving Settings" : "Settings Saved"}</h3>
             </div>
             <div className="popup-body">
@@ -1193,12 +1201,12 @@ export function App() {
         <div className="popup-overlay" onClick={() => setConfirmRebuild((c) => ({ ...c, visible: false }))}>
           <div className="popup-dialog warning" onClick={(e) => e.stopPropagation()}>
             <div className="popup-header">
-              <span className="popup-icon">⚠️</span>
+              <span className="popup-icon"><Icon name="warning" /></span>
               <h3>Confirm Disk Rebuild & Factory Reset</h3>
             </div>
             <div className="popup-body">
               <div className="popup-warn-box">
-                <strong>⚠️ Warning: All Android User Data Will Be Reset</strong>
+                <strong><Icon name="warning" /> Warning: All Android User Data Will Be Reset</strong>
                 <p>
                   Virtual partition resizing cannot be performed on encrypted Android userdata without re-initializing the filesystem.
                   Proceeding will <strong>erase all user data, installed applications, and personal settings</strong> (equivalent to a Factory Reset).
@@ -1215,9 +1223,9 @@ export function App() {
                     {confirmRebuild.force
                       ? "Full Reinstallation"
                       : confirmRebuild.isShrink
-                      ? "Shrink Virtual Disk (📉)"
+                      ? "Shrink Virtual Disk"
                       : confirmRebuild.isExpand
-                      ? "Expand Virtual Disk (📈)"
+                      ? "Expand Virtual Disk"
                       : "Rebuild Partition Layout"}
                   </strong>
                 </div>
@@ -1392,14 +1400,14 @@ function SettingsModal({
       <div className="config-panel settings-panel">
         <div className="config-head">
           <div>
-            <h2>⚙️ Emulator Settings</h2>
+            <h2><Icon name="settings" /> Emulator Settings</h2>
             <p className="config-sub">
               Manage runtime environments, virtual disks, hardware allocation and launch options.
             </p>
           </div>
           {!provisioning && (
             <button className="config-close" onClick={onClose} title="Close Settings">
-              ✕
+              <Icon name="x" />
             </button>
           )}
         </div>
@@ -1410,25 +1418,25 @@ function SettingsModal({
             className={`settings-tab-btn ${activeTab === "images" ? "active" : ""}`}
             onClick={() => setActiveTab("images")}
           >
-            💾 Images & Storage
+            <Icon name="save" /> Images & Storage
           </button>
           <button
             className={`settings-tab-btn ${activeTab === "runtime" ? "active" : ""}`}
             onClick={() => setActiveTab("runtime")}
           >
-            🛠️ Runtime & Tools
+            <Icon name="terminal" /> Runtime & Tools
           </button>
           <button
             className={`settings-tab-btn ${activeTab === "options" ? "active" : ""}`}
             onClick={() => setActiveTab("options")}
           >
-            ⚡ VM & Hardware
+            <Icon name="zap" /> VM & Hardware
           </button>
           <button
             className={`settings-tab-btn ${activeTab === "about" ? "active" : ""}`}
             onClick={() => setActiveTab("about")}
           >
-            ℹ️ System & About
+            <Icon name="info" /> System & About
           </button>
         </div>
 
@@ -1499,7 +1507,7 @@ function SettingsModal({
                     {isAospStandard ? (
                       <div className="custom-size-aosp-note standard">
                         <div className="aosp-note-header">
-                          <span className="aosp-note-icon">✓</span>
+                          <span className="aosp-note-icon"><Icon name="check" /></span>
                           <span>Standard Android Tier</span>
                         </div>
                         <p>
@@ -1509,7 +1517,7 @@ function SettingsModal({
                     ) : (
                       <div className="custom-size-aosp-note">
                         <div className="aosp-note-header">
-                          <span className="aosp-note-icon">💡</span>
+                          <span className="aosp-note-icon"><Icon name="lightbulb" /></span>
                           <span>AOSP Settings Display Note:</span>
                         </div>
                         <p>
@@ -1527,7 +1535,7 @@ function SettingsModal({
                             setCustomInputVal(aospTier.toString());
                           }}
                         >
-                          ⚡ Snap to {aospTier} GB (for 1:1 display in Android Settings)
+                          <Icon name="zap" /> Snap to {aospTier} GB (for 1:1 display in Android Settings)
                         </button>
                       </div>
                     )}
@@ -1537,7 +1545,7 @@ function SettingsModal({
                 {/* Shrink / Expand Notices */}
                 {config.disk_present && draft.sizeGb < config.disk_size_gb && (
                   <div className="partition-notice shrink">
-                    <span className="notice-icon">📉</span>
+                    <span className="notice-icon"><Icon name="trendDown" /></span>
                     <div className="notice-content">
                       <strong>Shrink Partition: {config.disk_size_gb} GB → {draft.sizeGb} GB</strong>
                       <p>
@@ -1550,7 +1558,7 @@ function SettingsModal({
 
                 {config.disk_present && draft.sizeGb > config.disk_size_gb && (
                   <div className="partition-notice expand">
-                    <span className="notice-icon">📈</span>
+                    <span className="notice-icon"><Icon name="trendUp" /></span>
                     <div className="notice-content">
                       <strong>Expand Partition: {config.disk_size_gb} GB → {draft.sizeGb} GB</strong>
                       <p>
@@ -1563,7 +1571,7 @@ function SettingsModal({
 
                 {isEmulatorRunning && (
                   <div className="partition-notice shrink">
-                    <span className="notice-icon">⚠️</span>
+                    <span className="notice-icon"><Icon name="warning" /></span>
                     <div className="notice-content">
                       <strong>Emulator is currently running</strong>
                       <p>Please click 'Stop Emulator' from the main toolbar before rebuilding or resizing virtual disks.</p>
@@ -1610,7 +1618,12 @@ function SettingsModal({
                 </div>
                 <div className="progress-meta">
                   <span className={`progress-stage ${provision.error ? "err" : ""}`}>
-                    {provision.error ? "❌ " : provision.done ? "✅ " : ""}
+                    {provision.error ? (
+                      <Icon name="xCircle" size={14} />
+                    ) : provision.done ? (
+                      <Icon name="checkCircle" size={14} />
+                    ) : null}
+                    {" "}
                     {provision.stage || "Working…"}
                   </span>
                   <span className="progress-pct">{pct}%</span>
@@ -1628,7 +1641,15 @@ function SettingsModal({
                 onClick={onInstall}
                 title={isEmulatorRunning ? "Stop emulator first before rebuilding disk" : undefined}
               >
-                {config.provisioned ? "⤓ Rebuild / Update Disk" : "▼ Install Android Image"}
+                {config.provisioned ? (
+                  <>
+                    <Icon name="rotateCw" /> Rebuild / Update Disk
+                  </>
+                ) : (
+                  <>
+                    <Icon name="download" /> Install Android Image
+                  </>
+                )}
               </button>
               {config.provisioned && (
                 <button
@@ -1637,7 +1658,7 @@ function SettingsModal({
                   onClick={onForceReinstall}
                   title={isEmulatorRunning ? "Stop emulator first before reinstalling" : "Re-copy image assets and build clean disk.raw"}
                 >
-                  ⟳ Force Reinstall
+                  <Icon name="rotateCw" /> Force Reinstall
                 </button>
               )}
               {!provisioning && (
@@ -1647,14 +1668,14 @@ function SettingsModal({
                   onClick={onSave}
                   title="Save storage settings"
                 >
-                  💾 Save Preferences
+                  <Icon name="save" /> Save Preferences
                 </button>
               )}
             </div>
 
             {!config.provisioned && !provisioning && (
               <p className="config-note">
-                💡 First time? Click <strong>Install Android Image</strong>. This sets up the runtime directory,
+                <Icon name="lightbulb" /> First time? Click <strong>Install Android Image</strong>. This sets up the runtime directory,
                 provisions the QEMU engine, and builds the Android 16 raw GPT disk image.
               </p>
             )}
@@ -1666,7 +1687,7 @@ function SettingsModal({
           <div className="tab-body">
             <div className="runtime-banner">
               <div className="runtime-banner-info">
-                <span className="runtime-banner-title">📁 Provisioned Runtime Root</span>
+                <span className="runtime-banner-title"><Icon name="folder" /> Provisioned Runtime Root</span>
                 <span className="runtime-banner-path" title={config.runtime_root}>
                   {config.runtime_root || "Not yet provisioned (%LOCALAPPDATA%\\QArmDroid)"}
                 </span>
@@ -1676,7 +1697,7 @@ function SettingsModal({
                 onClick={onOpenRuntimeFolder}
                 title="Open runtime folder in Windows File Explorer"
               >
-                📂 Open in Explorer
+                <Icon name="folderOpen" /> Open in Explorer
               </button>
             </div>
 
@@ -1684,7 +1705,7 @@ function SettingsModal({
               <div className="component-card">
                 <div className="component-header">
                   <div className="component-title">
-                    <span className="component-icon">⚡</span>
+                    <span className="component-icon"><Icon name="zap" /></span>
                     <strong>QEMU Hypervisor (ARM64 WHPX)</strong>
                   </div>
                   <span className={`status-badge ${config.qemu_present ? "ok" : "err"}`}>
@@ -1702,7 +1723,7 @@ function SettingsModal({
               <div className="component-card">
                 <div className="component-header">
                   <div className="component-title">
-                    <span className="component-icon">📱</span>
+                    <span className="component-icon"><Icon name="smartphone" /></span>
                     <strong>Scrcpy Display Mirror</strong>
                   </div>
                   <span className={`status-badge ${config.scrcpy_present ? "ok" : "err"}`}>
@@ -1720,7 +1741,7 @@ function SettingsModal({
               <div className="component-card">
                 <div className="component-header">
                   <div className="component-title">
-                    <span className="component-icon">🔌</span>
+                    <span className="component-icon"><Icon name="cable" /></span>
                     <strong>Android Debug Bridge (ADB)</strong>
                   </div>
                   <span className={`status-badge ${config.adb_present ? "ok" : "warn"}`}>
@@ -1738,7 +1759,7 @@ function SettingsModal({
               <div className="component-card">
                 <div className="component-header">
                   <div className="component-title">
-                    <span className="component-icon">🐍</span>
+                    <span className="component-icon"><Icon name="terminal" /></span>
                     <strong>Python Environment</strong>
                   </div>
                   <span className={`status-badge ${config.python_present ? "ok" : "warn"}`}>
@@ -1753,7 +1774,7 @@ function SettingsModal({
               <div className="component-card">
                 <div className="component-header">
                   <div className="component-title">
-                    <span className="component-icon">🛍️</span>
+                    <span className="component-icon"><Icon name="store" /></span>
                     <strong>Google Play Store & Services</strong>
                   </div>
                   <span className={`status-badge ${playStoreStatus.installed ? "ok" : draft.playStore ? "warn" : "dim"}`}>
@@ -1771,7 +1792,7 @@ function SettingsModal({
 
             <div className="config-actions">
               <button className="btn btn-secondary" onClick={onOpenRuntimeFolder}>
-                📂 Open Runtime Directory
+                <Icon name="folderOpen" /> Open Runtime Directory
               </button>
             </div>
           </div>
@@ -1792,21 +1813,21 @@ function SettingsModal({
                     className={`seg-btn ${displayMode === "embedded" ? "active" : ""}`}
                     onClick={() => setDisplayMode("embedded")}
                   >
-                    🌐 Embedded
+                    <Icon name="globe" /> Embedded
                     <small>Canvas inside window</small>
                   </button>
                   <button
                     className={`seg-btn ${displayMode === "scrcpy" ? "active" : ""}`}
                     onClick={() => setDisplayMode("scrcpy")}
                   >
-                    📱 Scrcpy
+                    <Icon name="smartphone" /> Scrcpy
                     <small>Hardware-rendered mirror</small>
                   </button>
                   <button
                     className={`seg-btn ${displayMode === "sdl" ? "active" : ""}`}
                     onClick={() => setDisplayMode("sdl")}
                   >
-                    🖥️ SDL
+                    <Icon name="monitor" /> SDL
                     <small>Native DirectX window</small>
                   </button>
                 </div>
@@ -1823,14 +1844,14 @@ function SettingsModal({
                     className={`seg-btn ${draft.gestureNav ? "active" : ""}`}
                     onClick={() => setDraft((d) => ({ ...d, gestureNav: true }))}
                   >
-                    👉 Switch to Gesture Navigation
+                    <Icon name="arrowRight" /> Switch to Gesture Navigation
                     <small>Edge-to-edge display (Default)</small>
                   </button>
                   <button
                     className={`seg-btn ${!draft.gestureNav ? "active" : ""}`}
                     onClick={() => setDraft((d) => ({ ...d, gestureNav: false }))}
                   >
-                    ⏹️ 3-Button Navigation
+                    <Icon name="stopCircle" /> 3-Button Navigation
                     <small>Classic Back, Home, Recents</small>
                   </button>
                 </div>
@@ -1847,14 +1868,14 @@ function SettingsModal({
                     className={`seg-btn ${!draft.tabletMode ? "active" : ""}`}
                     onClick={() => setDraft((d) => ({ ...d, tabletMode: false }))}
                   >
-                    📱 Standard Phone Mode
+                    <Icon name="smartphone" /> Standard Phone Mode
                     <small>240 dpi, standard landscape</small>
                   </button>
                   <button
                     className={`seg-btn ${draft.tabletMode ? "active" : ""}`}
                     onClick={() => setDraft((d) => ({ ...d, tabletMode: true }))}
                   >
-                    📟 Tablet Mode (600+ dp)
+                    <Icon name="tablet" /> Tablet Mode (600+ dp)
                     <small>213 dpi, dual-pane UI & dock</small>
                   </button>
                 </div>
@@ -1871,14 +1892,14 @@ function SettingsModal({
                     className={`seg-btn ${draft.playStore ? "active" : ""}`}
                     onClick={() => setDraft((d) => ({ ...d, playStore: true }))}
                   >
-                    🛍️ Enable Play Store
+                    <Icon name="store" /> Enable Play Store
                     <small>Auto-installs GMS & Play Store on boot</small>
                   </button>
                   <button
                     className={`seg-btn ${!draft.playStore ? "active" : ""}`}
                     onClick={() => setDraft((d) => ({ ...d, playStore: false }))}
                   >
-                    🛡️ Clean AOSP
+                    <Icon name="shield" /> Clean AOSP
                     <small>Pure open-source AOSP without Google services</small>
                   </button>
                 </div>
@@ -1897,7 +1918,19 @@ function SettingsModal({
                       onClick={onIntegratePlayStore}
                       title={!isEmulatorRunning ? "Start the emulator first to integrate live" : "Download and install Google Play Store & Services over ADB"}
                     >
-                      {integratingPlayStore ? "⏳ Integrating…" : playStoreStatus.installed ? "⟳ Reinstall / Update" : "⚡ Integrate Now"}
+                      {integratingPlayStore ? (
+                        <>
+                          <Icon name="hourglass" /> Integrating…
+                        </>
+                      ) : playStoreStatus.installed ? (
+                        <>
+                          <Icon name="rotateCw" /> Reinstall / Update
+                        </>
+                      ) : (
+                        <>
+                          <Icon name="zap" /> Integrate Now
+                        </>
+                      )}
                     </button>
                   </div>
 
@@ -1929,7 +1962,7 @@ function SettingsModal({
                         rel="noreferrer"
                         title="Open Google Play uncertified device registration page"
                       >
-                        Register GSF ID ↗
+                        Register GSF ID <Icon name="externalLink" />
                       </a>
                     </div>
                   ) : playStoreStatus.installed ? (
@@ -2016,14 +2049,14 @@ function SettingsModal({
                     className={`seg-btn ${draft.closeOnExit ? "active" : ""}`}
                     onClick={() => setDraft((d) => ({ ...d, closeOnExit: true }))}
                   >
-                    🛑 Close Emulator
+                    <Icon name="xCircle" /> Close Emulator
                     <small>Terminate QEMU when window exits</small>
                   </button>
                   <button
                     className={`seg-btn ${!draft.closeOnExit ? "active" : ""}`}
                     onClick={() => setDraft((d) => ({ ...d, closeOnExit: false }))}
                   >
-                    🔄 Keep Running
+                    <Icon name="refresh" /> Keep Running
                     <small>Leave emulator active in background</small>
                   </button>
                 </div>
@@ -2032,19 +2065,19 @@ function SettingsModal({
 
             <div className="optimization-card">
               <div>
-                <strong>⚡ Android Guest Animation Speedup</strong>
+                <strong><Icon name="zap" /> Android Guest Animation Speedup</strong>
                 <p className="section-help">
                   Eliminates window, transition, and animator duration scales in the Android guest for instantaneous app switching.
                 </p>
               </div>
               <button className="btn btn-secondary" onClick={onOptimize}>
-                ⚡ Optimize Now
+                <Icon name="zap" /> Optimize Now
               </button>
             </div>
 
             <div className="config-actions">
               <button className="btn btn-primary" onClick={onSave} title="Save hardware and display preferences">
-                💾 Save Preferences
+                <Icon name="save" /> Save Preferences
               </button>
             </div>
           </div>
