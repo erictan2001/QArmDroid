@@ -1,6 +1,6 @@
 [package]
 name = "tauri-app"
-version = "0.1.0"
+version = "0.2.0"
 description = "QArmDroid - Android 16 ARM64 Emulator for Windows on ARM (Snapdragon X Elite)"
 authors = ["Eric Tan Chen Hee <erictan2001@gmail.com>"]
 license = "MIT OR Apache-2.0"
